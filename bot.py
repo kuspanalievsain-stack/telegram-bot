@@ -63,7 +63,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_memory()
         await update.message.reply_text("🧹 Память очищена! Мы начинаем с чистого листа.")
     else:
-        await update.message.reply_text("У меня и так нет воспоминаний о тебе 🤷♂️")
+        await update.message.reply_text("У меня и так нет воспоминаний о тебе 🤷‍♂️")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
