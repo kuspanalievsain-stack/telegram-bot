@@ -42,7 +42,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_memories:
         user_memories[user_id] = []
         save_memory()
-        await update.message.reply_text(" Память очищена! Мы начинаем с чистого листа.")
+        await update.message.reply_text("🧹 Память очищена! Мы начинаем с чистого листа.")
     else:
         await update.message.reply_text("У меня и так нет воспоминаний о тебе 🤷‍♂️")
 
