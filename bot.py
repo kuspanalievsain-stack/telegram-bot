@@ -18,7 +18,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 def get_db_connection():
     """Получить подключение к базе данных"""
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg.connect(DATABASE_URL)
 
 def init_db():
     """Инициализировать базу данных (создать таблицу)"""
@@ -36,6 +36,39 @@ def init_db():
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_user_id ON user_messages(user_id)
         """)
+    conn.commit()
+    conn.close()
+
+def get_user_messages(user_id, limit=10):
+    """Получить последние сообщения пользователя"""
+    conn = get_db_connection()
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("""
+            SELECT role, content FROM user_messages 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT %s
+        """, (user_id, limit))
+        messages = cur.fetchall()
+    conn.close()
+    return list(reversed(messages))
+
+def save_user_message(user_id, role, content):
+    """Сохранить сообщение пользователя в базу"""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO user_messages (user_id, role, content) 
+            VALUES (%s, %s, %s)
+        """, (user_id, role, content))
+    conn.commit()
+    conn.close()
+
+def clear_user_messages(user_id):
+    """Удалить все сообщения пользователя"""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM user_messages WHERE user_id = %s", (user_id,))
     conn.commit()
     conn.close()
 
