@@ -32,10 +32,16 @@ def get_groq_response(messages):
         "Content-Type": "application/json"
     }
     
+    # Добавляем системную инструкцию в начало диалога
+    system_prompt = {
+        "role": "system",
+        "content": "Ты полезный, вежливый и творческий AI-ассистент. Отвечай по существу. Если просят написать стих или текст, делай это красиво, но НЕ выдумывай факты о пользователе (возраст, семья, работа), если он сам об этом не написал."
+    }
+    
     data = {
-        "messages": messages,
+        "messages": [system_prompt] + messages,  # Добавляем системный промпт к истории
         "model": "llama-3.1-8b-instant",
-        "temperature": 0.7,
+        "temperature": 0.6,  # Чуть снизили для большей точности (было 0.7)
         "max_tokens": 500
     }
     
