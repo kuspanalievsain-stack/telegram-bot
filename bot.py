@@ -3,6 +3,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import json
 import os
 import requests
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Токен бота от BotFather
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -10,20 +12,65 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # Ключ Groq API
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Память бота
-MEMORY_FILE = "memory.json"
+# База данных PostgreSQL
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-    return {}
+def get_db_connection():
+    """Получить подключение к базе данных"""
+    return psycopg2.connect(DATABASE_URL)
 
-def save_memory():
-    with open(MEMORY_FILE, "w", encoding="utf-8") as file:
-        json.dump(user_memories, file, ensure_ascii=False, indent=4)
+def init_db():
+    """Инициализировать базу данных (создать таблицу)"""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_messages (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                role VARCHAR(50) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_user_id ON user_messages(user_id)
+        """)
+    conn.commit()
+    conn.close()
 
-user_memories = load_memory()
+def get_user_messages(user_id, limit=10):
+    """Получить последние сообщения пользователя"""
+    conn = get_db_connection()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT role, content FROM user_messages 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT %s
+        """, (user_id, limit))
+        messages = cur.fetchall()
+    conn.close()
+    # Переворачиваем, чтобы было в хронологическом порядке
+    return list(reversed(messages))
+
+def save_user_message(user_id, role, content):
+    """Сохранить сообщение пользователя в базу"""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO user_messages (user_id, role, content) 
+            VALUES (%s, %s, %s)
+        """, (user_id, role, content))
+    conn.commit()
+    conn.close()
+
+def clear_user_messages(user_id):
+    """Удалить все сообщения пользователя"""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM user_messages WHERE user_id = %s", (user_id,))
+    conn.commit()
+    conn.close()
 
 def get_groq_response(messages):
     """Получить ответ от Groq API через HTTP запрос"""
@@ -44,7 +91,7 @@ def get_groq_response(messages):
     
     data = {
         "messages": [system_prompt] + messages,
-        "model": "llama-3.1-8b-instant",  # ВЕРНУЛИ рабочую модель
+        "model": "llama-3.1-8b-instant",
         "temperature": 0.7,
         "max_tokens": 800
     }
@@ -56,13 +103,11 @@ def get_groq_response(messages):
             json=data
         )
         
-        # Проверяем, успешен ли запрос
         if response.status_code != 200:
             return f"Ошибка API: {response.status_code} - {response.text}"
         
         response_data = response.json()
         
-        # Проверяем наличие choices
         if "choices" not in response_data or len(response_data["choices"]) == 0:
             return f"Ошибка: неожиданный ответ API: {response_data}"
         
@@ -73,42 +118,45 @@ def get_groq_response(messages):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    user_memories[user_id] = []
-    save_memory()
-    await update.message.reply_text("Привет! Я твой AI-ассистент с памятью. Задай любой вопрос!")
+    clear_user_messages(user_id)  # Очищаем старую историю
+    save_user_message(user_id, "system", "Пользователь начал диалог")
+    await update.message.reply_text("Привет! Я твой AI-ассистент с постоянной памятью. Задай любой вопрос!")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Доступные команды:\n/start - Начать заново\n/help - Помощь\n/clear - Очистить память\n\nПросто напиши мне что-нибудь!")
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id in user_memories:
-        user_memories[user_id] = []
-        save_memory()
-        await update.message.reply_text("🧹 Память очищена! Мы начинаем с чистого листа.")
-    else:
-        await update.message.reply_text("У меня и так нет воспоминаний о тебе 🤷‍♂️")
+    clear_user_messages(user_id)
+    await update.message.reply_text("🧹 Память очищена! Мы начинаем с чистого листа.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_text = update.message.text
     
-    if user_id not in user_memories:
-        user_memories[user_id] = []
-    user_memories[user_id].append({"role": "user", "content": user_text})
+    # Сохраняем сообщение пользователя
+    save_user_message(user_id, "user", user_text)
     
-    if len(user_memories[user_id]) > 10:
-        user_memories[user_id] = user_memories[user_id][-10:]
+    # Получаем историю сообщений
+    messages_history = get_user_messages(user_id, limit=10)
+    
+    # Формируем сообщения для Groq
+    groq_messages = []
+    for msg in messages_history:
+        groq_messages.append({"role": msg["role"], "content": msg["content"]})
     
     try:
-        ai_response = get_groq_response(user_memories[user_id])
-        user_memories[user_id].append({"role": "assistant", "content": ai_response})
-        save_memory()
+        ai_response = get_groq_response(groq_messages)
+        # Сохраняем ответ AI
+        save_user_message(user_id, "assistant", ai_response)
         await update.message.reply_text(ai_response)
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
 def main():
+    print("Инициализация базы данных...")
+    init_db()
+    
     print("Бот запускается...")
     application = Application.builder().token(TOKEN).build()
     
