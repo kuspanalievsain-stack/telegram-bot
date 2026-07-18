@@ -3,8 +3,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import json
 import os
 import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg import Cursor
+from psycopg.rows import dict_row
 
 # Токен бота от BotFather
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
