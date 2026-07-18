@@ -75,7 +75,7 @@ def clear_user_messages(user_id):
 def get_user_messages(user_id, limit=10):
     """Получить последние сообщения пользователя"""
     conn = get_db_connection()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute("""
             SELECT role, content FROM user_messages 
             WHERE user_id = %s 
