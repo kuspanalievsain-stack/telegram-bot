@@ -32,32 +32,44 @@ def get_groq_response(messages):
         "Content-Type": "application/json"
     }
     
-    # УСИЛЕННЫЙ системный промпт
+    # Усиленный системный промпт
     system_prompt = {
         "role": "system",
-        "content": """Ты талантливый AI-поэт и ассистент. 
+        "content": """Ты талантливый AI-помощник. 
 ВАЖНЫЕ ПРАВИЛА:
-1. НИКОГДА не выдумывай факты о пользователе (возраст, имена, даты, детали биографии), если он их сам не указал в запросе.
-2. Если просят стихотворение — пиши красиво, образно, в запрошенном стиле.
-3. Если в запросе есть конкретные детали (имена, возраст, факты) — используй ТОЛЬКО их.
-4. Если деталей нет — пиши обобщённо, метафорично, без конкретных цифр и имён.
-5. Будь креативным, но точным."""
+1. НИКОГДА не выдумывай факты о пользователе (возраст, имена, даты), если он их сам не указал.
+2. Если просят стихотворение — пиши красиво, в запрошенном стиле.
+3. Будь креативным, но точным."""
     }
     
     data = {
         "messages": [system_prompt] + messages,
-        "model": "mixtral-8x7b-32768",  # БОЛЕЕ КАЧЕСТВЕННАЯ модель для поэзии!
-        "temperature": 0.7,  # Вернули креативность (для стихов нужно больше)
-        "max_tokens": 800  # Увеличили для длинных стихов
+        "model": "llama-3.1-8b-instant",  # ВЕРНУЛИ рабочую модель
+        "temperature": 0.7,
+        "max_tokens": 800
     }
     
-    response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
-        headers=headers,
-        json=data
-    )
-    
-    return response.json()["choices"][0]["message"]["content"]
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
+        
+        # Проверяем, успешен ли запрос
+        if response.status_code != 200:
+            return f"Ошибка API: {response.status_code} - {response.text}"
+        
+        response_data = response.json()
+        
+        # Проверяем наличие choices
+        if "choices" not in response_data or len(response_data["choices"]) == 0:
+            return f"Ошибка: неожиданный ответ API: {response_data}"
+        
+        return response_data["choices"][0]["message"]["content"]
+        
+    except Exception as e:
+        return f"Ошибка: {str(e)}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
