@@ -38,9 +38,12 @@ def get_groq_response(messages):
         "content": "Ты полезный, вежливый и творческий AI-ассистент. Отвечай по существу. Если просят написать стих или текст, делай это красиво, но НЕ выдумывай факты о пользователе (возраст, семья, работа), если он сам об этом не написал."
     }
     
-    "model": "llama-3.2-90b-vision-preview",  # Более умная модель
-# или
-"model": "mixtral-8x7b-32768",  # Быстрая и качественная
+    # Правильный словарь data
+    data = {
+        "messages": [system_prompt] + messages,
+        "model": "llama-3.1-8b-instant",
+        "temperature": 0.6,
+        "max_tokens": 500
     }
     
     response = requests.post(
