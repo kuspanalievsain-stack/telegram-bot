@@ -146,9 +146,42 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Начинаем новый диалог! Чем могу помочь?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик обычных сообщений"""
+    """Обработчик обычных сообщений с валидацией"""
     user_id = update.message.from_user.id
     user_message = update.message.text
+    
+    # Проверяем, есть ли у пользователя незавершённый диалог
+    if user_id in memory and len(memory[user_id]) > 0:
+        # Проверяем, задавал ли бот вопросы
+        last_ai_message = ""
+        for msg in reversed(memory[user_id]):
+            if msg["role"] == "assistant":
+                last_ai_message = msg["content"]
+                break
+        
+        # Если бот задавал вопросы, проверяем полноту ответа
+        if "вопрос" in last_ai_message.lower() or "уточнить" in last_ai_message.lower():
+            # Проверяем, есть ли ответы на все 3 вопроса
+            has_color = any(word in user_message.lower() for word in ["цвет", "версия", "белый", "чёрный", "синий", "красный", "зелёный", "премиум", "базовый"])
+            has_audience = any(word in user_message.lower() for word in ["аудитори", "спортсмен", "дет", "взросл", "профессионал", "любитель"])
+            has_seo = any(word in user_message.lower() for word in ["seo", "ключ", "водостойк", "мониторинг", "отслеживан"])
+            
+            missing = []
+            if not has_color:
+                missing.append("цвет/версию")
+            if not has_audience:
+                missing.append("целевую аудиторию")
+            if not has_seo:
+                missing.append("SEO-ключи")
+            
+            if missing:
+                # Не хватает ответов
+                await update.message.reply_text(
+                    f"Спасибо за ответ! Но мне нужно ещё уточнить:\n\n"
+                    f"❌ Не хватает информации о: {', '.join(missing)}\n\n"
+                    f"Пожалуйста, дополни свой ответ."
+                )
+                return
     
     # Показываем, что бот печатает
     await update.message.chat.send_action(action="typing")
