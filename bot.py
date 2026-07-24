@@ -146,9 +146,9 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Начинаем новый диалог! Чем могу помочь?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик обычных сообщений с валидацией"""
+    """Обработчик обычных сообщений с умной валидацией"""
     user_id = update.message.from_user.id
-    user_message = update.message.text
+    user_message = update.message.text.lower()
     
     # Проверяем, есть ли у пользователя незавершённый диалог
     if user_id in memory and len(memory[user_id]) > 0:
@@ -160,29 +160,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 break
         
         # Если бот задавал вопросы, проверяем полноту ответа
-        if "вопрос" in last_ai_message.lower() or "уточнить" in last_ai_message.lower():
-            # Проверяем, есть ли ответы на все 3 вопроса
-            has_color = any(word in user_message.lower() for word in ["цвет", "версия", "белый", "чёрный", "синий", "красный", "зелёный", "премиум", "базовый"])
-            has_audience = any(word in user_message.lower() for word in ["аудитори", "спортсмен", "дет", "взросл", "профессионал", "любитель"])
-            has_seo = any(word in user_message.lower() for word in ["seo", "ключ", "водостойк", "мониторинг", "отслеживан"])
+        if "вопрос" in last_ai_message.lower() or "уточнить" in last_ai_message.lower() or "детал" in last_ai_message.lower():
+            # Проверяем, есть ли ответы на все 3 вопроса (более умная проверка)
+            
+            # Цвет/версия: ищем слова, связанные с цветом, версией, размером
+            color_words = ["цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", 
+                          "премиум", "базов", "стандарт", "размер", "s", "m", "l", "xl",
+                          "накладн", "вкладыш", "проводн", "безпроводн", "микрофон"]
+            has_color = any(word in user_message for word in color_words)
+            
+            # Аудитория: ищем слова, связанные с целевой группой
+            audience_words = ["аудитори", "спортсмен", "дет", "взросл", "профессионал", 
+                             "любитель", "геймер", "музык", "фитнес", "бег", "трениров",
+                             "офис", "работ", "дом", "улица", "18+", "16+", "подрост",
+                             "мужчин", "женщин", "универсал", "все", "кажд", "пользовател",
+                             "клиент", "покупател"]
+            has_audience = any(word in user_message for word in audience_words)
+            
+            # SEO-ключи: ищем слова, связанные с функциями и особенностями
+            seo_words = ["seo", "ключ", "водостойк", "мониторинг", "отслеживан", "шаг",
+                        "пульс", "сердечн", "ритм", "bluetooth", "wifi", "gps", "наушник",
+                        "звук", "бас", "шум", "автоном", "батаре", "заряд", "время",
+                        "работа", "поддержк", "совместим", "android", "ios", "iphone",
+                        "качество", "hi", "hd", "стерео", "мощн", "громк", "тих",
+                        "функци", "возможност", "особенност", "характеристик", "параметр"]
+            has_seo = any(word in user_message for word in seo_words)
             
             missing = []
             if not has_color:
-                missing.append("цвет/версию")
+                missing.append("цвет/версию/размер")
             if not has_audience:
                 missing.append("целевую аудиторию")
             if not has_seo:
-                missing.append("SEO-ключи")
+                missing.append("ключевые особенности/функции")
             
             if missing:
-                # Не хватает ответов
+                # Не хватает ответов — даём более понятное сообщение
                 await update.message.reply_text(
-                    f"Спасибо за ответ! Но мне нужно ещё уточнить:\n\n"
-                    f"❌ Не хватает информации о: {', '.join(missing)}\n\n"
-                    f"Пожалуйста, дополни свой ответ."
+                    f"Спасибо за ответ! 🙏\n\n"
+                    f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
+                    f"⚠️ Не хватает: {', '.join(missing)}\n\n"
+                    f"💡 Пример хорошего ответа:\n"
+                    f"«1. Цвет: чёрные, с микрофоном\n"
+                    f"2. Для кого: для спортсменов и любителей музыки\n"
+                    f"3. Особенности: водостойкие, Bluetooth 5.0, автономность 20 часов»"
                 )
                 return
     
+    # Показываем, что бот печатает
+    await update.message.chat.send_action(action="typing")
+    
+    # Получаем ответ от AI
+    ai_response = get_ai_response(user_id, user_message)
+    
+    # Отправляем ответ
+    await update.message.reply_text(ai_response)
     # Показываем, что бот печатает
     await update.message.chat.send_action(action="typing")
     
