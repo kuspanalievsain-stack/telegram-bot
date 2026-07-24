@@ -1,208 +1,151 @@
+import os
+import json
+import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import json
-import os
-import requests
+from groq import Groq
 import psycopg
-from psycopg import Cursor
 from psycopg.rows import dict_row
+from dotenv import load_dotenv
 
-# Токен бота от BotFather
-TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Загрузка переменных окружения
+load_dotenv()
 
-# Ключ Groq API
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# База данных PostgreSQL
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# Инициализация клиентов
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def get_db_connection():
-    """Получить подключение к базе данных"""
-    return psycopg.connect(DATABASE_URL)
+# Память для хранения истории сообщений
+memory = {}
 
-def init_db():
-    """Инициализировать базу данных (создать таблицу)"""
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS user_messages (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                role VARCHAR(50) NOT NULL,
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+def load_memory():
+    """Загрузка памяти из базы данных"""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS user_memory (user_id BIGINT PRIMARY KEY, history JSONB)")
+        cursor.execute("SELECT user_id, history FROM user_memory")
+        rows = cursor.fetchall()
+        for row in rows:
+            memory[row['user_id']] = row['history']
+        cursor.close()
+        conn.close()
+        logger.info("Память загружена из базы данных")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки памяти: {e}")
+
+def save_memory(memory_dict):
+    """Сохранение памяти в базу данных"""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS user_memory (user_id BIGINT PRIMARY KEY, history JSONB)")
+        for user_id, history in memory_dict.items():
+            cursor.execute(
+                "INSERT INTO user_memory (user_id, history) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET history = %s",
+                (user_id, json.dumps(history), json.dumps(history))
             )
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_user_id ON user_messages(user_id)
-        """)
-    conn.commit()
-    conn.close()
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения памяти: {e}")
 
-def get_user_messages(user_id, limit=10):
-    """Получить последние сообщения пользователя"""
-    conn = get_db_connection()
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("""
-            SELECT role, content FROM user_messages 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC 
-            LIMIT %s
-        """, (user_id, limit))
-        messages = cur.fetchall()
-    conn.close()
-    return list(reversed(messages))
-
-def save_user_message(user_id, role, content):
-    """Сохранить сообщение пользователя в базу"""
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO user_messages (user_id, role, content) 
-            VALUES (%s, %s, %s)
-        """, (user_id, role, content))
-    conn.commit()
-    conn.close()
-
-def clear_user_messages(user_id):
-    """Удалить все сообщения пользователя"""
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM user_messages WHERE user_id = %s", (user_id,))
-    conn.commit()
-    conn.close()
-
-def get_user_messages(user_id, limit=10):
-    """Получить последние сообщения пользователя"""
-    conn = get_db_connection()
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute("""
-            SELECT role, content FROM user_messages 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC 
-            LIMIT %s
-        """, (user_id, limit))
-        messages = cur.fetchall()
-    conn.close()
-    # Переворачиваем, чтобы было в хронологическом порядке
-    return list(reversed(messages))
-
-def save_user_message(user_id, role, content):
-    """Сохранить сообщение пользователя в базу"""
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO user_messages (user_id, role, content) 
-            VALUES (%s, %s, %s)
-        """, (user_id, role, content))
-    conn.commit()
-    conn.close()
-
-def clear_user_messages(user_id):
-    """Удалить все сообщения пользователя"""
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("DELETE FROM user_messages WHERE user_id = %s", (user_id,))
-    conn.commit()
-    conn.close()
-
-def get_groq_response(messages):
-    """Получить ответ от Groq API через HTTP запрос"""
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
+def get_ai_response(user_id, user_message):
+    """Получение ответа от AI с системным промптом"""
+    if user_id not in memory:
+        memory[user_id] = []
     
-    # Усиленный системный промпт
-    system_prompt = {
-        "role": "system",
-        "content": """Ты талантливый AI-помощник. 
-ВАЖНЫЕ ПРАВИЛА:
-1. НИКОГДА не выдумывай факты о пользователе (возраст, имена, даты), если он их сам не указал.
-2. Если просят стихотворение — пиши красиво, в запрошенном стиле.
-3. Будь креативным, но точным."""
-    }
+    memory[user_id].append({"role": "user", "content": user_message})
     
-    data = {
-        "messages": [system_prompt] + messages,
-        "model": "llama-3.1-8b-instant",
-        "temperature": 0.7,
-        "max_tokens": 800
-    }
+    # Ограничиваем историю последними 10 сообщениями
+    if len(memory[user_id]) > 10:
+        memory[user_id] = memory[user_id][-10:]
     
     try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=data
+        # Системный промпт - инструкция для бота
+        system_prompt = "Ты — копирайтер для маркетплейсов. НИКОГДА не пиши карточку сразу. ВСЕГДА сначала задай 3 вопроса: 1) Какой цвет/версия? 2) Для какой аудитории? 3) Есть ли SEO-ключи? Только после ответов пиши карточку."
+        
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *memory[user_id]
+            ]
         )
         
-        if response.status_code != 200:
-            return f"Ошибка API: {response.status_code} - {response.text}"
-        
-        response_data = response.json()
-        
-        if "choices" not in response_data or len(response_data["choices"]) == 0:
-            return f"Ошибка: неожиданный ответ API: {response_data}"
-        
-        return response_data["choices"][0]["message"]["content"]
-        
+        ai_message = response.choices[0].message.content
+        memory[user_id].append({"role": "assistant", "content": ai_message})
+        save_memory(memory)
+        return ai_message
     except Exception as e:
+        logger.error(f"Ошибка при получении ответа от AI: {e}")
         return f"Ошибка: {str(e)}"
 
+# ====== Обработчики команд ======
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    clear_user_messages(user_id)  # Очищаем старую историю
-    save_user_message(user_id, "system", "Пользователь начал диалог")
-    await update.message.reply_text("Привет! Я твой AI-ассистент с постоянной памятью. Задай любой вопрос!")
+    """Обработчик команды /start"""
+    await update.message.reply_text("Привет! Я AI-бот для создания карточек товаров. Напиши мне что-нибудь!")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Доступные команды:\n/start - Начать заново\n/help - Помощь\n/clear - Очистить память\n\nПросто напиши мне что-нибудь!")
-
-async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /clear - очистка памяти"""
     user_id = update.message.from_user.id
-    clear_user_messages(user_id)
-    await update.message.reply_text("🧹 Память очищена! Мы начинаем с чистого листа.")
+    if user_id in memory:
+        del memory[user_id]
+        save_memory(memory)
+    await update.message.reply_text("Память очищена!")
+
+async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /newchat - новый чат"""
+    user_id = update.message.from_user.id
+    if user_id in memory:
+        del memory[user_id]
+        save_memory(memory)
+    await update.message.reply_text("Начинаем новый диалог! Чем могу помочь?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик обычных сообщений"""
     user_id = update.message.from_user.id
-    user_text = update.message.text
+    user_message = update.message.text
     
-    # Сохраняем сообщение пользователя
-    save_user_message(user_id, "user", user_text)
+    # Показываем, что бот печатает
+    await update.message.chat.send_action(action="typing")
     
-    # Получаем историю сообщений
-    messages_history = get_user_messages(user_id, limit=10)
+    # Получаем ответ от AI
+    ai_response = get_ai_response(user_id, user_message)
     
-    # Формируем сообщения для Groq
-    groq_messages = []
-    for msg in messages_history:
-        groq_messages.append({"role": msg["role"], "content": msg["content"]})
-    
-    try:
-        ai_response = get_groq_response(groq_messages)
-        # Сохраняем ответ AI
-        save_user_message(user_id, "assistant", ai_response)
-        await update.message.reply_text(ai_response)
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка: {e}")
+    # Отправляем ответ
+    await update.message.reply_text(ai_response)
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Update {update} caused error {context.error}")
 
 def main():
-    print("Инициализация базы данных...")
-    init_db()
+    """Запуск бота"""
+    # Загрузка памяти
+    load_memory()
     
-    print("Бот запускается...")
-    application = Application.builder().token(TOKEN).build()
+    # Создание приложения
+    application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     
+    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("clear", clear_command))
-    
+    application.add_handler(CommandHandler("clear", clear))
+    application.add_handler(CommandHandler("newchat", newchat))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_error_handler(error_handler)
     
-    print("Бот запущен! Жду сообщений...")
-    # Добавляем обработку ошибок polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Запуск бота
+    logger.info("Бот запускается...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
