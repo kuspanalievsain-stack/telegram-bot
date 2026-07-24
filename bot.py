@@ -215,14 +215,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Отправляем ответ
     await update.message.reply_text(ai_response)
-    # Показываем, что бот печатает
-    await update.message.chat.send_action(action="typing")
-    
-    # Получаем ответ от AI
-    ai_response = get_ai_response(user_id, user_message)
-    
-    # Отправляем ответ
-    await update.message.reply_text(ai_response)
+   
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
