@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация клиентов
+# Инициализация Groq
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 # Память для хранения истории сообщений
@@ -145,7 +145,7 @@ def main():
     
     # Запуск бота
     logger.info("Бот запускается...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
