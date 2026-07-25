@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from groq import Groq
@@ -95,6 +96,25 @@ def save_card(user_id, card_text):
         logger.info(f"Карточка сохранена для пользователя {user_id}")
     except Exception as e:
         logger.error(f"Ошибка сохранения карточки: {e}")
+
+async def show_progress(update: Update, step: int, total_steps: int):
+    """Показывает прогресс создания карточки"""
+    progress_messages = {
+        1: " **Анализирую запрос...**\n_Понимаю, что нужно описать_",
+        2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
+        3: "⏳ **Задаю вопросы...**\n_Нужно уточнить детали_",
+        4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
+        5: " **Проверяю ответы...**\n_Анализирую информацию_",
+        6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
+        7: "⏳ **Создаю карточку...**\n_Пишу продающее описание_",
+        8: "✅ **Карточка готова!**\n_Сохраняю и отправляю_"
+    }
+    
+    if step in progress_messages:
+        progress_bar = "█" * step + "░" * (total_steps - step)
+        message = f"**Прогресс:** [{progress_bar}] {step}/{total_steps}\n\n{progress_messages[step]}"
+        await update.message.reply_text(message, parse_mode='Markdown')
+        await asyncio.sleep(0.5)  # Небольшая пауза для эффекта
 
 def get_ai_response(user_id, user_message):
     """Получение ответа от AI с системным промптом"""
@@ -223,7 +243,7 @@ def get_edit_keyboard():
     keyboard = [
         [
             InlineKeyboardButton("💬 Изменить цвет", callback_data="edit_color"),
-            InlineKeyboardButton(" Изменить ЦА", callback_data="edit_audience")
+            InlineKeyboardButton("👥 Изменить ЦА", callback_data="edit_audience")
         ],
         [
             InlineKeyboardButton("🔑 Изменить SEO", callback_data="edit_seo"),
@@ -280,7 +300,7 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del memory[user_id]
         save_memory(memory)
     await update.message.reply_text(
-        "🔄 **Начинаем новый диалог!**\n\n"
+        " **Начинаем новый диалог!**\n\n"
         "Напиши, какой товар нужно описать, или выбери действие:",
         reply_markup=get_main_keyboard(),
         parse_mode='Markdown'
@@ -293,7 +313,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Я помогаю создавать профессиональные карточки для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
 
-📋 **Доступные команды:**
+ **Доступные команды:**
 /start — Приветствие и начало работы
 /help — Показать эту справку
 /newchat — Начать новый диалог
@@ -301,14 +321,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /edit — Редактировать последнюю карточку
 /mycards — Посмотреть все мои карточки
 
- **Как работать со мной:**
+💡 **Как работать со мной:**
 1. Напиши, какой товар нужно описать
 2. Я задам 3 уточняющих вопроса
 3. Ответь на вопросы
 4. Получи готовую карточку!
 
-🎯 **Пример запроса:** "Напиши карточку для фитнес-браслета"
-📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
+ **Пример запроса:** "Напиши карточку для фитнес-браслета"
+ **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
 
 👇 **Выбери действие:**
 """
@@ -498,16 +518,36 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data == "back_to_main":
         await query.edit_message_text(
-            " **Главное меню**\n\n"
+            "🏠 **Главное меню**\n\n"
             "Что будем делать?",
             reply_markup=get_main_keyboard(),
             parse_mode='Markdown'
         )
 
+# ====== Обработчик примера ответа (callback) ======
+
+async def show_example_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать пример хорошего ответа"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "💡 **Пример хорошего ответа:**\n\n"
+        "«1. **Цвет:** чёрные, с микрофоном\n"
+        "2. **Для кого:** для спортсменов и любителей музыки\n"
+        "3. **Особенности:** водостойкие, Bluetooth 5.0, автономность 20 часов»\n\n"
+        "Напиши свой ответ в таком же формате! 👇",
+        parse_mode='Markdown'
+    )
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Update {update} caused error {context.error}")
+
 # ====== Обработчик обычных сообщений ======
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик обычных сообщений с умной валидацией"""
+    """Обработчик обычных сообщений с умной валидацией и прогресс-баром"""
     user_id = update.message.from_user.id
     user_message = update.message.text.lower()
     
@@ -522,6 +562,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Если бот задавал вопросы, проверяем полноту ответа
         if "вопрос" in last_ai_message.lower() or "уточнить" in last_ai_message.lower() or "детал" in last_ai_message.lower():
+            
+            # Показываем прогресс (шаг 5 - проверка ответов)
+            await show_progress(update, 5, 8)
             
             # Цвет/версия: расширенный список
             color_words = ["цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", 
@@ -569,9 +612,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
                 ]
                 await update.message.reply_text(
-                    f"🙏 **Спасибо за ответ!**\n\n"
+                    f" **Спасибо за ответ!**\n\n"
                     f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
-                    f"️ **Не хватает:** {', '.join(missing)}\n\n"
+                    f"⚠️ **Не хватает:** {', '.join(missing)}\n\n"
                     f"💡 **Пример хорошего ответа:**\n"
                     f"«1. Цвет: чёрные, с микрофоном\n"
                     f"2. Для кого: для спортсменов и любителей музыки\n"
@@ -580,12 +623,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode='Markdown'
                 )
                 return
+            
+            # Ответы полные - показываем прогресс
+            await show_progress(update, 6, 8)
+            await show_progress(update, 7, 8)
     
     # Показываем, что бот печатает
     await update.message.chat.send_action(action="typing")
     
+    # Показываем начальный прогресс
+    await show_progress(update, 1, 8)
+    await show_progress(update, 2, 8)
+    
     # Получаем ответ от AI
     ai_response = get_ai_response(user_id, user_message)
+    
+    # Показываем финальный прогресс
+    await show_progress(update, 8, 8)
     
     # Отправляем ответ с кнопками
     await send_long_message(
@@ -593,26 +647,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ai_response,
         reply_markup=get_main_keyboard()
     )
-
-# ====== Обработчик примера ответа (callback) ======
-
-async def show_example_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать пример хорошего ответа"""
-    query = update.callback_query
-    await query.answer()
-    
-    await query.edit_message_text(
-        "💡 **Пример хорошего ответа:**\n\n"
-        "«1. **Цвет:** чёрные, с микрофоном\n"
-        "2. **Для кого:** для спортсменов и любителей музыки\n"
-        "3. **Особенности:** водостойкие, Bluetooth 5.0, автономность 20 часов»\n\n"
-        "Напиши свой ответ в таком же формате! 👇",
-        parse_mode='Markdown'
-    )
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик ошибок"""
-    logger.error(f"Update {update} caused error {context.error}")
 
 def main():
     """Запуск бота"""
