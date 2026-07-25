@@ -1,13 +1,12 @@
 import os
 import json
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from groq import Groq
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
-from datetime import datetime
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -167,11 +166,99 @@ def get_ai_response(user_id, user_message):
         logger.error(f"Ошибка при получении ответа от AI: {e}")
         return f"Ошибка: {str(e)}"
 
+# ====== Вспомогательные функции ======
+
+async def send_long_message(update: Update, text: str, reply_markup=None):
+    """Отправка длинного сообщения с разбиением на части"""
+    max_length = 4000  # Оставляем запас до лимита Telegram (4096)
+    
+    if len(text) <= max_length:
+        if reply_markup:
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, parse_mode='Markdown')
+        return
+    
+    # Разбиваем сообщение
+    parts = []
+    while len(text) > max_length:
+        # Ищем последний перенос строки в пределах лимита
+        split_pos = text.rfind('\n\n', 0, max_length)
+        if split_pos == -1:
+            split_pos = text.rfind('\n', 0, max_length)
+        if split_pos == -1:
+            split_pos = max_length
+        
+        parts.append(text[:split_pos])
+        text = text[split_pos:].lstrip()
+    
+    if text:
+        parts.append(text)
+    
+    # Отправляем все части
+    for i, part in enumerate(parts):
+        if i == len(parts) - 1 and reply_markup:
+            await update.message.reply_text(part, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(part, parse_mode='Markdown')
+
+# ====== Клавиатуры ======
+
+def get_main_keyboard():
+    """Главная клавиатура с основными действиями"""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Новая карточка", callback_data="new_card"),
+            InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")
+        ],
+        [
+            InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
+            InlineKeyboardButton("❓ Помощь", callback_data="help")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_edit_keyboard():
+    """Клавиатура для редактирования"""
+    keyboard = [
+        [
+            InlineKeyboardButton("💬 Изменить цвет", callback_data="edit_color"),
+            InlineKeyboardButton(" Изменить ЦА", callback_data="edit_audience")
+        ],
+        [
+            InlineKeyboardButton("🔑 Изменить SEO", callback_data="edit_seo"),
+            InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")
+        ],
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_help_keyboard():
+    """Клавиатура для справки"""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Создать карточку", callback_data="new_card"),
+            InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")
+        ],
+        [
+            InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 # ====== Обработчики команд ======
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    await update.message.reply_text("Привет! Я AI-бот для создания карточек товаров. Напиши мне что-нибудь!")
+    await update.message.reply_text(
+        "👋 **Привет! Я AI-бот для создания карточек товаров.**\n\n"
+        "Я помогу тебе создать профессиональную карточку для маркетплейса за пару минут!\n\n"
+        "👇 **Выбери действие:**",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /clear - очистка памяти"""
@@ -179,7 +266,12 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in memory:
         del memory[user_id]
         save_memory(memory)
-    await update.message.reply_text("Память очищена!")
+    await update.message.reply_text(
+        "✅ **Память очищена!**\n\n"
+        "Теперь мы начнём с чистого листа. Что будем создавать?",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
 
 async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /newchat - новый чат"""
@@ -187,7 +279,12 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in memory:
         del memory[user_id]
         save_memory(memory)
-    await update.message.reply_text("Начинаем новый диалог! Чем могу помочь?")
+    await update.message.reply_text(
+        "🔄 **Начинаем новый диалог!**\n\n"
+        "Напиши, какой товар нужно описать, или выбери действие:",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
@@ -199,26 +296,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📋 **Доступные команды:**
 /start — Приветствие и начало работы
 /help — Показать эту справку
-/newchat — Начать новый диалог (очистить память)
+/newchat — Начать новый диалог
 /clear — Очистить историю сообщений
 /edit — Редактировать последнюю карточку
 /mycards — Посмотреть все мои карточки
 
  **Как работать со мной:**
-1. Напиши мне, какой товар нужно описать (например: "Напиши карточку для наушников")
-2. Я задам 3 уточняющих вопроса (цвет/версия, аудитория, SEO/особенности)
+1. Напиши, какой товар нужно описать
+2. Я задам 3 уточняющих вопроса
 3. Ответь на вопросы
 4. Получи готовую карточку!
 
-️ **Как редактировать карточку:**
-После создания карточки напиши: `/edit измени цвет на синий`
-
 🎯 **Пример запроса:** "Напиши карточку для фитнес-браслета"
-📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, мониторинг пульса, Bluetooth 5.0"
+📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
 
-✨ **Готов начать? Просто напиши, какой товар нужно описать!**
+👇 **Выбери действие:**
 """
-    await update.message.reply_text(help_text)
+    await update.message.reply_text(
+        help_text,
+        reply_markup=get_help_keyboard(),
+        parse_mode='Markdown'
+    )
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /edit - редактирование последней карточки"""
@@ -226,7 +324,12 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Проверяем, есть ли карточки у пользователя
     if user_id not in card_history or len(card_history[user_id]) == 0:
-        await update.message.reply_text(" У тебя ещё нет созданных карточек. Сначала создай карточку!")
+        await update.message.reply_text(
+            "😕 **У тебя ещё нет созданных карточек.**\n\n"
+            "Сначала создай карточку, а потом редактируй её!",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
         return
     
     # Получаем текст редактирования
@@ -234,10 +337,14 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not edit_text:
         await update.message.reply_text(
-            "️ **Как редактировать карточку:**\n\n"
-            "Напиши: `/edit измени цвет на синий`\n\n"
-            "Или: `/edit добавь информацию о гарантии`\n\n"
-            "Я возьму последнюю карточку и внесу изменения."
+            "✏️ **Редактирование карточки**\n\n"
+            "Напиши, что нужно изменить. Например:\n\n"
+            "• `/edit измени цвет на синий`\n"
+            "• `/edit добавь информацию о гарантии`\n"
+            "• `/edit сделай описание короче`\n\n"
+            "Или выбери быстрое действие:",
+            reply_markup=get_edit_keyboard(),
+            parse_mode='Markdown'
         )
         return
     
@@ -268,7 +375,11 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Сохраняем отредактированную карточку
         save_card(user_id, edited_card)
         
-        await update.message.reply_text("✅ Карточка обновлена!\n\n" + edited_card)
+        await send_long_message(
+            update,
+            "✅ **Карточка обновлена!**\n\n" + edited_card,
+            reply_markup=get_main_keyboard()
+        )
     except Exception as e:
         logger.error(f"Ошибка при редактировании: {e}")
         await update.message.reply_text(f"❌ Ошибка при редактировании: {str(e)}")
@@ -279,7 +390,12 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Проверяем, есть ли карточки у пользователя
     if user_id not in card_history or len(card_history[user_id]) == 0:
-        await update.message.reply_text(" У тебя ещё нет созданных карточек.")
+        await update.message.reply_text(
+            "📭 **У тебя ещё нет созданных карточек.**\n\n"
+            "Создай первую карточку, и она появится здесь!",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
         return
     
     # Показываем последние 5 карточек
@@ -288,13 +404,107 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = f"📋 **Твои последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
     
     for i, card in enumerate(reversed(cards), 1):
-        # Берём только первые 100 символов для превью
-        preview = card[:100].replace("\n", " ") + "..." if len(card) > 100 else card
+        # Берём только первые 150 символов для превью
+        preview = card[:150].replace("\n", " ").replace("**", "") + "..." if len(card) > 150 else card
         message += f"**{i}.** {preview}\n\n"
     
-    message += "💡 Чтобы увидеть полную карточку, напиши `/edit показать последнюю карточку полностью`"
+    await update.message.reply_text(
+        message,
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
+
+# ====== Обработчик callback-запросов (кнопки) ======
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на инлайн-кнопки"""
+    query = update.callback_query
+    await query.answer()
     
-    await update.message.reply_text(message)
+    user_id = query.from_user.id
+    data = query.data
+    
+    if data == "new_card":
+        await query.edit_message_text(
+            "➕ **Новая карточка**\n\n"
+            "Напиши, какой товар нужно описать. Например:\n"
+            "• \"Напиши карточку для наушников\"\n"
+            "• \"Создай карточку для фитнес-браслета\"\n"
+            "• \"Опиши умные часы\""
+        )
+    
+    elif data == "my_cards":
+        # Вызываем обработчик команды /mycards
+        await mycards_command(update, context)
+    
+    elif data == "edit_last":
+        if user_id not in card_history or len(card_history[user_id]) == 0:
+            await query.edit_message_text(
+                "😕 **У тебя ещё нет карточек для редактирования.**\n\n"
+                "Сначала создай карточку!",
+                reply_markup=get_main_keyboard(),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                "✏️ **Редактирование последней карточки**\n\n"
+                "Напиши, что нужно изменить. Например:\n"
+                "• \"измени цвет на синий\"\n"
+                "• \"добавь информацию о гарантии\"\n"
+                "• \"сделай описание короче\"\n\n"
+                "Или выбери быстрое действие:",
+                reply_markup=get_edit_keyboard(),
+                parse_mode='Markdown'
+            )
+    
+    elif data == "edit_color":
+        await query.edit_message_text(
+            "🎨 **Изменение цвета**\n\n"
+            "Напиши, какой цвет должен быть у товара. Например:\n"
+            "• \"синий\"\n"
+            "• \"чёрный матовый\"\n"
+            "• \"белый с золотыми вставками\""
+        )
+    
+    elif data == "edit_audience":
+        await query.edit_message_text(
+            "👥 **Изменение целевой аудитории**\n\n"
+            "Напиши, для кого предназначен товар. Например:\n"
+            "• \"для спортсменов\"\n"
+            "• \"для геймеров 18+\"\n"
+            "• \"для детей от 6 лет\""
+        )
+    
+    elif data == "edit_seo":
+        await query.edit_message_text(
+            "🔑 **Изменение SEO-ключей**\n\n"
+            "Напиши ключевые слова или особенности. Например:\n"
+            "• \"водостойкий, Bluetooth 5.0\"\n"
+            "• \"автономность 20 часов\"\n"
+            "• \"шумоподавление\""
+        )
+    
+    elif data == "edit_custom":
+        await query.edit_message_text(
+            "📝 **Свой запрос на редактирование**\n\n"
+            "Напиши, что нужно изменить в последней карточке. Например:\n"
+            "• \"добавь раздел про гарантию\"\n"
+            "• \"сделай описание более продающим\"\n"
+            "• \"убери технические характеристики\""
+        )
+    
+    elif data == "help":
+        await help_command(update, context)
+    
+    elif data == "back_to_main":
+        await query.edit_message_text(
+            " **Главное меню**\n\n"
+            "Что будем делать?",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+
+# ====== Обработчик обычных сообщений ======
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик обычных сообщений с умной валидацией"""
@@ -354,14 +564,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 missing.append("ключевые особенности/функции")
             
             if missing:
+                keyboard = [
+                    [InlineKeyboardButton("💡 Пример ответа", callback_data="show_example")],
+                    [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+                ]
                 await update.message.reply_text(
-                    f"Спасибо за ответ! \n\n"
+                    f"🙏 **Спасибо за ответ!**\n\n"
                     f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
-                    f"⚠️ Не хватает: {', '.join(missing)}\n\n"
-                    f"💡 Пример хорошего ответа:\n"
+                    f"️ **Не хватает:** {', '.join(missing)}\n\n"
+                    f"💡 **Пример хорошего ответа:**\n"
                     f"«1. Цвет: чёрные, с микрофоном\n"
                     f"2. Для кого: для спортсменов и любителей музыки\n"
-                    f"3. Особенности: водостойкие, Bluetooth 5.0, автономность 20 часов»"
+                    f"3. Особенности: водостойкие, Bluetooth 5.0, автономность 20 часов»",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
                 )
                 return
     
@@ -371,8 +587,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Получаем ответ от AI
     ai_response = get_ai_response(user_id, user_message)
     
-    # Отправляем ответ
-    await update.message.reply_text(ai_response)
+    # Отправляем ответ с кнопками
+    await send_long_message(
+        update,
+        ai_response,
+        reply_markup=get_main_keyboard()
+    )
+
+# ====== Обработчик примера ответа (callback) ======
+
+async def show_example_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать пример хорошего ответа"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "💡 **Пример хорошего ответа:**\n\n"
+        "«1. **Цвет:** чёрные, с микрофоном\n"
+        "2. **Для кого:** для спортсменов и любителей музыки\n"
+        "3. **Особенности:** водостойкие, Bluetooth 5.0, автономность 20 часов»\n\n"
+        "Напиши свой ответ в таком же формате! 👇",
+        parse_mode='Markdown'
+    )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок"""
@@ -386,13 +622,19 @@ def main():
     # Создание приложения
     application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     
-    # Регистрация обработчиков
+    # Регистрация обработчиков команд
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("clear", clear))
     application.add_handler(CommandHandler("newchat", newchat))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("edit", edit_command))
     application.add_handler(CommandHandler("mycards", mycards_command))
+    
+    # Регистрация обработчика callback-запросов (кнопки)
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(CallbackQueryHandler(show_example_callback, pattern="^show_example$"))
+    
+    # Обработчик обычных сообщений (в конце!)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
     
