@@ -7,6 +7,7 @@ from groq import Groq
 import psycopg
 from psycopg.rows import dict_row
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -24,16 +25,32 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # Память для хранения истории сообщений
 memory = {}
 
+# История карточек для каждого пользователя
+card_history = {}
+
 def load_memory():
     """Загрузка памяти из базы данных"""
+    global card_history
     try:
         conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
         cursor = conn.cursor()
+        
+        # Загрузка истории сообщений
         cursor.execute("CREATE TABLE IF NOT EXISTS user_memory (user_id BIGINT PRIMARY KEY, history JSONB)")
         cursor.execute("SELECT user_id, history FROM user_memory")
         rows = cursor.fetchall()
         for row in rows:
             memory[row['user_id']] = row['history']
+        
+        # Загрузка истории карточек
+        cursor.execute("CREATE TABLE IF NOT EXISTS product_cards (id SERIAL PRIMARY KEY, user_id BIGINT, card_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("SELECT user_id, card_text FROM product_cards ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        for row in rows:
+            if row['user_id'] not in card_history:
+                card_history[row['user_id']] = []
+            card_history[row['user_id']].append(row['card_text'])
+        
         cursor.close()
         conn.close()
         logger.info("Память загружена из базы данных")
@@ -56,6 +73,29 @@ def save_memory(memory_dict):
         conn.close()
     except Exception as e:
         logger.error(f"Ошибка сохранения памяти: {e}")
+
+def save_card(user_id, card_text):
+    """Сохранение карточки в базу данных"""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS product_cards (id SERIAL PRIMARY KEY, user_id BIGINT, card_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute(
+            "INSERT INTO product_cards (user_id, card_text) VALUES (%s, %s)",
+            (user_id, card_text)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        # Добавляем в локальную историю
+        if user_id not in card_history:
+            card_history[user_id] = []
+        card_history[user_id].append(card_text)
+        
+        logger.info(f"Карточка сохранена для пользователя {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения карточки: {e}")
 
 def get_ai_response(user_id, user_message):
     """Получение ответа от AI с системным промптом"""
@@ -118,6 +158,10 @@ def get_ai_response(user_id, user_message):
         ai_message = response.choices[0].message.content
         memory[user_id].append({"role": "assistant", "content": ai_message})
         save_memory(memory)
+        
+        # Сохраняем карточку в историю
+        save_card(user_id, ai_message)
+        
         return ai_message
     except Exception as e:
         logger.error(f"Ошибка при получении ответа от AI: {e}")
@@ -157,12 +201,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /help — Показать эту справку
 /newchat — Начать новый диалог (очистить память)
 /clear — Очистить историю сообщений
+/edit — Редактировать последнюю карточку
+/mycards — Посмотреть все мои карточки
 
-💡 **Как работать со мной:**
+ **Как работать со мной:**
 1. Напиши мне, какой товар нужно описать (например: "Напиши карточку для наушников")
 2. Я задам 3 уточняющих вопроса (цвет/версия, аудитория, SEO/особенности)
 3. Ответь на вопросы
 4. Получи готовую карточку!
+
+️ **Как редактировать карточку:**
+После создания карточки напиши: `/edit измени цвет на синий`
 
 🎯 **Пример запроса:** "Напиши карточку для фитнес-браслета"
 📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, мониторинг пульса, Bluetooth 5.0"
@@ -170,6 +219,82 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ✨ **Готов начать? Просто напиши, какой товар нужно описать!**
 """
     await update.message.reply_text(help_text)
+
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /edit - редактирование последней карточки"""
+    user_id = update.message.from_user.id
+    
+    # Проверяем, есть ли карточки у пользователя
+    if user_id not in card_history or len(card_history[user_id]) == 0:
+        await update.message.reply_text(" У тебя ещё нет созданных карточек. Сначала создай карточку!")
+        return
+    
+    # Получаем текст редактирования
+    edit_text = " ".join(context.args) if context.args else ""
+    
+    if not edit_text:
+        await update.message.reply_text(
+            "️ **Как редактировать карточку:**\n\n"
+            "Напиши: `/edit измени цвет на синий`\n\n"
+            "Или: `/edit добавь информацию о гарантии`\n\n"
+            "Я возьму последнюю карточку и внесу изменения."
+        )
+        return
+    
+    # Берём последнюю карточку
+    last_card = card_history[user_id][-1]
+    
+    # Показываем, что бот печатает
+    await update.message.chat.send_action(action="typing")
+    
+    # Создаём промпт для редактирования
+    edit_prompt = f"""Ты — профессиональный копирайтер. 
+
+Вот последняя созданная карточка:
+{last_card}
+
+Пользователь просит внести следующие изменения: {edit_text}
+
+Внеси изменения в карточку, сохранив общий стиль и формат. Верни полную обновлённую карточку."""
+    
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": edit_prompt}]
+        )
+        
+        edited_card = response.choices[0].message.content
+        
+        # Сохраняем отредактированную карточку
+        save_card(user_id, edited_card)
+        
+        await update.message.reply_text("✅ Карточка обновлена!\n\n" + edited_card)
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании: {e}")
+        await update.message.reply_text(f"❌ Ошибка при редактировании: {str(e)}")
+
+async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /mycards - просмотр истории карточек"""
+    user_id = update.message.from_user.id
+    
+    # Проверяем, есть ли карточки у пользователя
+    if user_id not in card_history or len(card_history[user_id]) == 0:
+        await update.message.reply_text(" У тебя ещё нет созданных карточек.")
+        return
+    
+    # Показываем последние 5 карточек
+    cards = card_history[user_id][-5:]
+    
+    message = f"📋 **Твои последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
+    
+    for i, card in enumerate(reversed(cards), 1):
+        # Берём только первые 100 символов для превью
+        preview = card[:100].replace("\n", " ") + "..." if len(card) > 100 else card
+        message += f"**{i}.** {preview}\n\n"
+    
+    message += "💡 Чтобы увидеть полную карточку, напиши `/edit показать последнюю карточку полностью`"
+    
+    await update.message.reply_text(message)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик обычных сообщений с умной валидацией"""
@@ -230,7 +355,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if missing:
                 await update.message.reply_text(
-                    f"Спасибо за ответ! 🙏\n\n"
+                    f"Спасибо за ответ! \n\n"
                     f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
                     f"⚠️ Не хватает: {', '.join(missing)}\n\n"
                     f"💡 Пример хорошего ответа:\n"
@@ -266,6 +391,8 @@ def main():
     application.add_handler(CommandHandler("clear", clear))
     application.add_handler(CommandHandler("newchat", newchat))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(CommandHandler("mycards", mycards_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
     
