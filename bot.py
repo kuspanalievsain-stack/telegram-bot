@@ -3,7 +3,6 @@ import json
 import requests
 import logging
 import subprocess
-import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -80,22 +79,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "👋 Привет! Я ИИ-бот с памятью.\n\n"
-        "📝 Просто пиши мне — я запомню наш разговор.\n"
+        " Просто пиши мне — я запомню наш разговор.\n"
         "🎨 /gen <описание> — сгенерирую картинку\n"
         "🎤 Отправь голосовое — распознаю речь\n"
         " /clear — очистить память\n"
-        " /help — помощь"
+        "📋 /help — помощь"
     )
     log_action(user_id, username, "START")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Мои возможности:**\n\n"
-        " **Обычный чат** — пиши что угодно, я запомню контекст\n"
-        "🎨 **/gen <текст>** — сгенерирую изображение по описанию\n"
+        "💬 **Обычный чат** — пиши что угодно, я запомню контекст\n"
+        " **/gen <текст>** — сгенерирую изображение по описанию\n"
         "🎤 **Голосовые сообщения** — распознаю речь и отвечу\n"
         "🗑 **/clear** — очистить историю разговора\n\n"
-        " Примеры:\n"
+        "💡 Примеры:\n"
         "• /gen кот в космосе\n"
         "• /gen закат над морем\n"
         "• Просто напиши или отправь голосовое!",
@@ -107,7 +106,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_memory:
         del user_memory[user_id]
         save_json(MEMORY_FILE, user_memory)
-        await update.message.reply_text(" Память очищена!")
+        await update.message.reply_text("🗑 Память очищена!")
     else:
         await update.message.reply_text("Память уже пуста.")
 
@@ -143,13 +142,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_messages = sum(data.get("message_count", 0) for data in users_db.values())
     
     stats_text = f"""
-📊 **Статистика бота:**
+ **Статистика бота:**
 
-👥 **Всего пользователей:** {total_users}
- **Активных сегодня:** {active_today}
+ **Всего пользователей:** {total_users}
+🟢 **Активных сегодня:** {active_today}
 💬 **Всего сообщений:** {total_messages}
 
- **Дата:** {datetime.now().strftime('%d.%m.%Y %H:%M')}
+📅 **Дата:** {datetime.now().strftime('%d.%m.%Y %H:%M')}
 """
     await update.message.reply_text(stats_text, parse_mode="Markdown")
 
@@ -157,14 +156,14 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     
     if not is_admin(user_id):
-        await update.message.reply_text(" Эта команда доступна только администратору.")
+        await update.message.reply_text("❌ Эта команда доступна только администратору.")
         return
     
     if not users_db:
         await update.message.reply_text("📭 База пользователей пуста.")
         return
     
-    users_list = " **Пользователи:**\n\n"
+    users_list = "👥 **Пользователи:**\n\n"
     for uid, data in users_db.items():
         username = data.get("username", "unknown")
         first_seen = data.get("first_seen", "unknown")[:10]
@@ -186,7 +185,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = " ".join(context.args) if context.args else None
     
     if not message:
-        await update.message.reply_text(" Укажи текст: /broadcast <сообщение>")
+        await update.message.reply_text("❗ Укажи текст: /broadcast <сообщение>")
         return
     
     await update.message.reply_text(f"📢 Начинаю рассылку: {message[:50]}...")
@@ -202,7 +201,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fail_count += 1
             logger.error(f"Broadcast failed to {uid}: {e}")
     
-    await update.message.reply_text(f"✅ Рассылка завершена!\n\n📤 Успешно: {success_count}\n❌ Ошибок: {fail_count}")
+    await update.message.reply_text(f"✅ Рассылка завершена!\n\n Успешно: {success_count}\n❌ Ошибок: {fail_count}")
 
 # ===== ОБРАБОТКА СООБЩЕНИЙ =====
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,7 +243,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_message(update, context, recognized_text, user_id, username)
         
     except subprocess.TimeoutExpired:
-        await update.message.reply_text("⏱️ Превышено время обработки.")
+        await update.message.reply_text("️ Превышено время обработки.")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка распознавания: {str(e)}")
         logger.error(f"Voice recognition error: {e}")
@@ -290,11 +289,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_message(update, context, update.message.text, user_id, username)
 
 # ===== ЗАПУСК БОТА =====
-async def main_async():
-    """Асинхронная функция для запуска бота"""
+async def post_init(application):
+    """Инициализация после создания приложения"""
+    logger.info("✅ Инициализация бота...")
+    # Удаляем webhook, чтобы избежать конфликта 409
+    await application.bot.delete_webhook()
+    logger.info("✅ Webhook удалён")
+
+def main():
+    """Основная функция"""
     try:
-        logger.info(" Создаю приложение...")
-        application = Application.builder().token(TOKEN).build()
+        logger.info("🤖 Создаю приложение...")
+        
+        # Создаём приложение с post_init для удаления webhook
+        application = Application.builder().token(TOKEN).post_init(post_init).build()
         
         logger.info("📝 Регистрирую обработчики...")
         application.add_handler(CommandHandler("start", start))
@@ -307,15 +315,10 @@ async def main_async():
         application.add_handler(MessageHandler(filters.VOICE, handle_voice))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        logger.info(" Удаляю webhook и запускаю polling...")
-        
-        # Асинхронное удаление webhook
-        await application.bot.delete_webhook()
-        logger.info("✅ Webhook удалён")
-        
+        logger.info("🚀 Запускаю polling...")
         logger.info("🤖 Бот запущен и готов к работе!")
         
-        # Запуск polling
+        # Запуск polling (blocking)
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             timeout=30,
@@ -323,14 +326,10 @@ async def main_async():
         )
         
     except KeyboardInterrupt:
-        logger.info("👋 Бот остановлен пользователем")
+        logger.info(" Бот остановлен пользователем")
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}", exc_info=True)
         raise
-
-def main():
-    """Обёртка для запуска асинхронной функции"""
-    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()
