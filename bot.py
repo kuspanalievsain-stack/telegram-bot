@@ -22,7 +22,7 @@ USERS_FILE = "users.json"
 LOG_FILE = "bot.log"
 
 # Твой Telegram user_id (администратор)
-ADMIN_ID = "123456789"  # ЗАМЕНИ НА СВОЙ ID!
+ADMIN_ID = "501464319"  # ЗАМЕНИ НА СВОЙ ID!
 
 # Настройка логирования
 logging.basicConfig(
