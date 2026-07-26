@@ -2,11 +2,11 @@ import os
 import json
 import requests
 import logging
+import subprocess
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
-from pydub import AudioSegment
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -16,15 +16,12 @@ if not TOKEN or not GROQ_API_KEY:
 
 client = Groq(api_key=GROQ_API_KEY)
 
-# Файлы для хранения данных
 MEMORY_FILE = "memory.json"
 USERS_FILE = "users.json"
 LOG_FILE = "bot.log"
 
-# Твой Telegram user_id (администратор)
 ADMIN_ID = "501464319"  # ЗАМЕНИ НА СВОЙ ID!
 
-# Настройка логирования
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
@@ -42,8 +39,7 @@ def save_json(filename, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 def log_action(user_id, username, action):
-    user_info = f"User {user_id} ({username})"
-    logging.info(f"{user_info} - {action}")
+    logging.info(f"User {user_id} ({username}) - {action}")
 
 user_memory = load_json(MEMORY_FILE)
 users_db = load_json(USERS_FILE)
@@ -71,7 +67,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я ИИ-бот с памятью.\n\n"
         "📝 Просто пиши мне — я запомню наш разговор.\n"
-        " /gen <описание> — сгенерирую картинку\n"
+        "🎨 /gen <описание> — сгенерирую картинку\n"
         "🎤 Отправь голосовое — распознаю речь\n"
         "🗑 /clear — очистить память\n"
         "❓ /help — помощь"
@@ -79,38 +75,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log_action(user_id, username, "START")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
-    
     await update.message.reply_text(
-        " **Мои возможности:**\n\n"
+        "🤖 **Мои возможности:**\n\n"
         "💬 **Обычный чат** — пиши что угодно, я запомню контекст\n"
         "🎨 **/gen <текст>** — сгенерирую изображение по описанию\n"
-        "🎤 **Голосовые сообщения** — распознаю речь и отвечу\n"
+        " **Голосовые сообщения** — распознаю речь и отвечу\n"
         "🗑 **/clear** — очистить историю разговора\n\n"
-        " Примеры:\n"
+        "💡 Примеры:\n"
         "• /gen кот в космосе\n"
         "• /gen закат над морем\n"
         "• Просто напиши или отправь голосовое!",
         parse_mode="Markdown"
     )
-    log_action(user_id, username, "HELP")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
-    
     if user_id in user_memory:
         del user_memory[user_id]
         save_json(MEMORY_FILE, user_memory)
         await update.message.reply_text("🗑 Память очищена!")
     else:
         await update.message.reply_text("Память уже пуста.")
-    log_action(user_id, username, "CLEAR")
 
 async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
     prompt = " ".join(context.args) if context.args else None
     
     if not prompt:
@@ -118,7 +106,6 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     await update.message.reply_text(f"🎨 Генерирую: {prompt}...")
-    log_action(user_id, username, f"GEN: {prompt}")
     
     try:
         encoded_prompt = requests.utils.quote(prompt)
@@ -126,7 +113,6 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=image_url, caption=f"✅ Готово!\nЗапрос: {prompt}")
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка генерации: {str(e)}")
-        logging.error(f"Image generation error: {e}")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -138,25 +124,20 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(users_db)
     today = datetime.now().date().isoformat()
     
-    active_today = 0
-    for uid, data in users_db.items():
-        if data.get("last_seen", "").startswith(today):
-            active_today += 1
-    
+    active_today = sum(1 for data in users_db.values() 
+                       if data.get("last_seen", "").startswith(today))
     total_messages = sum(data.get("message_count", 0) for data in users_db.values())
     
     stats_text = f"""
 📊 **Статистика бота:**
 
 👥 **Всего пользователей:** {total_users}
-🟢 **Активных сегодня:** {active_today}
+ **Активных сегодня:** {active_today}
 💬 **Всего сообщений:** {total_messages}
 
 📅 **Дата:** {datetime.now().strftime('%d.%m.%Y %H:%M')}
 """
-    
     await update.message.reply_text(stats_text, parse_mode="Markdown")
-    logging.info(f"Admin {user_id} viewed stats")
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -180,7 +161,6 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_list = users_list[:4000] + "\n... (список обрезан)"
     
     await update.message.reply_text(users_list, parse_mode="Markdown")
-    logging.info(f"Admin {user_id} viewed users list")
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -208,32 +188,33 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fail_count += 1
             logging.error(f"Broadcast failed to {uid}: {e}")
     
-    result = f"✅ Рассылка завершена!\n\n📤 Успешно: {success_count}\n❌ Ошибок: {fail_count}"
-    await update.message.reply_text(result)
-    logging.info(f"Admin {user_id} broadcasted: {message[:100]}")
+    await update.message.reply_text(f"✅ Рассылка завершена!\n\n📤 Успешно: {success_count}\n❌ Ошибок: {fail_count}")
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка голосовых сообщений"""
+    """Обработка голосовых сообщений через ffmpeg + Groq Whisper"""
     user_id = str(update.effective_user.id)
     username = update.effective_user.username or "unknown"
     
     await update.message.reply_text("🎤 Распознаю голосовое сообщение...")
     log_action(user_id, username, "VOICE_MESSAGE")
     
+    ogg_path = f"voice_{user_id}_{int(datetime.now().timestamp())}.ogg"
+    mp3_path = ogg_path.replace(".ogg", ".mp3")
+    
     try:
-        # Получаем голосовое сообщение
         voice = update.message.voice
         voice_file = await context.bot.get_file(voice.file_id)
-        
-        # Скачиваем файл
-        ogg_path = f"voice_{user_id}_{int(datetime.now().timestamp())}.ogg"
-        mp3_path = ogg_path.replace(".ogg", ".mp3")
-        
         await voice_file.download_to_drive(ogg_path)
         
-        # Конвертируем OGG в MP3
-        audio = AudioSegment.from_ogg(ogg_path)
-        audio.export(mp3_path, format="mp3")
+        # Конвертируем OGG в MP3 через ffmpeg
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", mp3_path],
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            raise Exception(f"ffmpeg error: {result.stderr}")
         
         # Отправляем в Groq Whisper API
         with open(mp3_path, "rb") as audio_file:
@@ -245,12 +226,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         recognized_text = transcript.text
         
-        # Удаляем временные файлы
-        if os.path.exists(ogg_path):
-            os.remove(ogg_path)
-        if os.path.exists(mp3_path):
-            os.remove(mp3_path)
-        
         await update.message.reply_text(f"📝 Распознано: {recognized_text}")
         log_action(user_id, username, f"VOICE TRANSCRIBED: {recognized_text[:50]}")
         
@@ -258,17 +233,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_message(update, context, recognized_text, user_id, username)
         
     except Exception as e:
-        await update.message.reply_text(f" Ошибка распознавания: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка распознавания: {str(e)}")
         logging.error(f"Voice recognition error: {e}")
-        
-        # Очищаем временные файлы при ошибке
+    finally:
         for path in [ogg_path, mp3_path]:
             if os.path.exists(path):
                 os.remove(path)
 
 async def process_message(update, context, user_message, user_id, username):
-    """Обработка текстового сообщения (используется и для обычных, и для распознанных)"""
-    # Обновляем статистику
+    """Обработка текстового сообщения"""
     if user_id in users_db:
         users_db[user_id]["message_count"] = users_db[user_id].get("message_count", 0) + 1
         users_db[user_id]["last_seen"] = datetime.now().isoformat()
@@ -299,12 +272,9 @@ async def process_message(update, context, user_message, user_id, username):
         logging.error(f"Chat error: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обычные текстовые сообщения"""
     user_id = str(update.effective_user.id)
     username = update.effective_user.username or "unknown"
-    user_message = update.message.text
-    
-    await process_message(update, context, user_message, user_id, username)
+    await process_message(update, context, update.message.text, user_id, username)
 
 def main():
     application = Application.builder().token(TOKEN).build()
@@ -316,11 +286,7 @@ def main():
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
-    
-    # Обработчик голосовых сообщений
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    
-    # Обработчик текстовых сообщений
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("🤖 Бот запущен!")
