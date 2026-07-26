@@ -82,45 +82,63 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     await update.message.reply_text("👁 Анализирую изображение...")
     
+    photo_path = f"temp_photo_{user_id}.jpg"
+    
     try:
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
-        photo_path = f"temp_photo_{user_id}.jpg"
         await file.download_to_drive(photo_path)
         
         with open(photo_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
         
-        response = client.chat.completions.create(
-            model="llama-3.2-11b-vision-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
+        # Пробуем основную модель, если не работает — fallback
+        models_to_try = [
+            "llama-3.2-90b-vision-preview",
+            "llama-3.2-11b-vision",
+            "llama-3.1-70b-versatile"
+        ]
+        
+        description = None
+        last_error = None
+        
+        for model in models_to_try:
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
                         {
-                            "type": "text",
-                            "text": "Опиши подробно что изображено на этом фото. На русском языке."
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Опиши подробно что изображено на этом фото. На русском языке."
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}"
+                                    }
+                                }
+                            ]
                         }
-                    ]
-                }
-            ],
-            max_tokens=1000
-        )
+                    ],
+                    max_tokens=1000
+                )
+                description = response.choices[0].message.content
+                break
+            except Exception as e:
+                last_error = str(e)
+                continue
         
-        description = response.choices[0].message.content
-        await update.message.reply_text(f"📷 **Описание:**\n\n{description}", parse_mode="Markdown")
+        if description:
+            await update.message.reply_text(f"📷 **Описание:**\n\n{description}", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"❌ Ошибка анализа фото: {last_error}")
         
-        if os.path.exists(photo_path):
-            os.remove(photo_path)
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка анализа фото: {str(e)}")
-        photo_path = f"temp_photo_{user_id}.jpg"
+    finally:
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
