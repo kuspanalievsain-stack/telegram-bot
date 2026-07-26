@@ -185,7 +185,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = " ".join(context.args) if context.args else None
     
     if not message:
-        await update.message.reply_text("❗ Укажи текст: /broadcast <сообщение>")
+        await update.message.reply_text(" Укажи текст: /broadcast <сообщение>")
         return
     
     await update.message.reply_text(f"📢 Начинаю рассылку: {message[:50]}...")
@@ -291,7 +291,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== ЗАПУСК БОТА =====
 def main():
     try:
-        logger.info(" Создаю приложение...")
+        logger.info("🤖 Создаю приложение...")
         application = Application.builder().token(TOKEN).build()
         
         logger.info("📝 Регистрирую обработчики...")
@@ -305,7 +305,12 @@ def main():
         application.add_handler(MessageHandler(filters.VOICE, handle_voice))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        logger.info("🚀 Запускаю polling...")
+        logger.info("🚀 Удаляю webhook и запускаю polling...")
+        
+        # Явно удаляем webhook перед запуском polling
+        application.bot.delete_webhook()
+        logger.info("✅ Webhook удалён")
+        
         logger.info(" Бот запущен и готов к работе!")
         
         application.run_polling(
