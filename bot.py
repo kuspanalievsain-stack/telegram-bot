@@ -44,7 +44,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗑 **/clear** — очистить историю разговора\n\n"
         "💡 Примеры:\n"
         "• /gen кот в космосе\n"
-        "• /gen закат над морем",
+        "• /gen закат над морем\n"
+        "• Просто напиши что-нибудь!",
         parse_mode="Markdown"
     )
 
@@ -62,7 +63,7 @@ async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = " ".join(context.args) if context.args else None
     
     if not prompt:
-        await update.message.reply_text(" Укажи описание: /gen <что нарисовать>")
+        await update.message.reply_text("❗ Укажи описание: /gen <что нарисовать>")
         return
     
     await update.message.reply_text(f"🎨 Генерирую: {prompt}...")
@@ -107,11 +108,9 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("clear", clear))
     application.add_handler(CommandHandler("gen", generate_image))
-    
-    # Убрали обработчик фото
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print(" Бот запущен!")
+    print("🤖 Бот запущен!")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
