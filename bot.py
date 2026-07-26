@@ -32,8 +32,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я ИИ-бот с памятью.\n\n"
         "📝 Просто пиши мне — я запомню наш разговор.\n"
-        "🎨 /gen <описание> — сгенерирую картинку\n"
-        "📷 Пришли фото — опишу что на нём\n"
+        " /gen <описание> — сгенерирую картинку\n"
+        " Пришли фото — опишу что на нём\n"
         "🗑 /clear — очистить память\n"
         "❓ /help — помощь"
     )
@@ -41,10 +41,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Мои возможности:**\n\n"
-        "💬 **Обычный чат** — пиши что угодно, я запомню контекст\n"
-        " **/gen <текст>** — сгенерирую изображение по описанию\n"
-        " **Отправь фото** — опишу что на нём изображено\n"
-        " **/clear** — очистить историю разговора\n\n"
+        " **Обычный чат** — пиши что угодно, я запомню контекст\n"
+        "🎨 **/gen <текст>** — сгенерирую изображение по описанию\n"
+        "📷 **Отправь фото** — опишу что на нём изображено\n"
+        "🗑 **/clear** — очистить историю разговора\n\n"
         "💡 Примеры:\n"
         "• /gen кот в космосе\n"
         "• /gen закат над морем\n"
@@ -57,7 +57,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_memory:
         del user_memory[user_id]
         save_memory(user_memory)
-        await update.message.reply_text(" Память очищена!")
+        await update.message.reply_text("🗑 Память очищена!")
     else:
         await update.message.reply_text("Память уже пуста.")
 
@@ -92,12 +92,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(photo_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
         
-        # АКТУАЛЬНЫЕ модели Groq (2026)
+        # ПРОВЕРЕННЫЕ модели Groq
         models_to_try = [
-            "llama-3.3-70b-versatile",
-            "llama-3.2-90b-vision-preview",
-            "llama-3.2-11b-vision",
-            "llama-3.1-70b-specialized"
+            "llama-3.2-11b-vision-preview",
+            "llama-3.2-90b-vision-preview"
         ]
         
         description = None
@@ -135,10 +133,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if description:
             await update.message.reply_text(f"📷 **Описание:**\n\n{description}", parse_mode="Markdown")
         else:
-            await update.message.reply_text(f"❌ Ошибка анализа фото: {last_error}")
+            await update.message.reply_text(f"❌ Ошибка анализа фото: {last_error}\n\nПопробуйте другую фотографию.")
         
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка анализа фото: {str(e)}")
+        await update.message.reply_text(f" Ошибка анализа фото: {str(e)}")
     finally:
         if os.path.exists(photo_path):
             os.remove(photo_path)
@@ -155,7 +153,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_memory[user_id] = user_memory[user_id][-20:]
     
     try:
-        # АКТУАЛЬНАЯ модель для текста (2026)
+        # ПРОВЕРЕННАЯ модель для текста
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=user_memory[user_id],
