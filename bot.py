@@ -3,6 +3,7 @@ import json
 import requests
 import logging
 import subprocess
+import asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -90,7 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 **Мои возможности:**\n\n"
-        "💬 **Обычный чат** — пиши что угодно, я запомню контекст\n"
+        " **Обычный чат** — пиши что угодно, я запомню контекст\n"
         "🎨 **/gen <текст>** — сгенерирую изображение по описанию\n"
         "🎤 **Голосовые сообщения** — распознаю речь и отвечу\n"
         "🗑 **/clear** — очистить историю разговора\n\n"
@@ -106,7 +107,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_memory:
         del user_memory[user_id]
         save_json(MEMORY_FILE, user_memory)
-        await update.message.reply_text("🗑 Память очищена!")
+        await update.message.reply_text(" Память очищена!")
     else:
         await update.message.reply_text("Память уже пуста.")
 
@@ -145,7 +146,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **Статистика бота:**
 
 👥 **Всего пользователей:** {total_users}
-🟢 **Активных сегодня:** {active_today}
+ **Активных сегодня:** {active_today}
 💬 **Всего сообщений:** {total_messages}
 
  **Дата:** {datetime.now().strftime('%d.%m.%Y %H:%M')}
@@ -289,9 +290,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await process_message(update, context, update.message.text, user_id, username)
 
 # ===== ЗАПУСК БОТА =====
-def main():
+async def main_async():
+    """Асинхронная функция для запуска бота"""
     try:
-        logger.info("🤖 Создаю приложение...")
+        logger.info(" Создаю приложение...")
         application = Application.builder().token(TOKEN).build()
         
         logger.info("📝 Регистрирую обработчики...")
@@ -305,14 +307,15 @@ def main():
         application.add_handler(MessageHandler(filters.VOICE, handle_voice))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
-        logger.info("🚀 Удаляю webhook и запускаю polling...")
+        logger.info(" Удаляю webhook и запускаю polling...")
         
-        # Явно удаляем webhook перед запуском polling
-        application.bot.delete_webhook()
+        # Асинхронное удаление webhook
+        await application.bot.delete_webhook()
         logger.info("✅ Webhook удалён")
         
-        logger.info(" Бот запущен и готов к работе!")
+        logger.info("🤖 Бот запущен и готов к работе!")
         
+        # Запуск polling
         application.run_polling(
             allowed_updates=Update.ALL_TYPES,
             timeout=30,
@@ -324,6 +327,10 @@ def main():
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}", exc_info=True)
         raise
+
+def main():
+    """Обёртка для запуска асинхронной функции"""
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()
