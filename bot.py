@@ -90,7 +90,6 @@ def load_memory():
                 card_history[row['user_id']] = []
             card_history[row['user_id']].append(row['card_text'])
         
-        # Загрузка статистики
         cursor.execute("SELECT COUNT(DISTINCT user_id) as total_users FROM user_actions")
         row = cursor.fetchone()
         if row:
@@ -157,7 +156,6 @@ def save_card(user_id, card_text):
             card_history[user_id] = []
         card_history[user_id].append(card_text)
         
-        # Логируем создание карточки
         log_action(user_id, "card_created", card_text[:100])
         stats["total_cards"] += 1
         
@@ -172,9 +170,9 @@ async def show_progress(update: Update, step: int, total_steps: int):
         2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
         3: "✍️ **Задаю вопросы...**\n_Нужно уточнить детали_",
         4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
-        5: "🔍 **Проверяю ответы...**\n_Анализирую информацию_",
+        5: " **Проверяю ответы...**\n_Анализирую информацию_",
         6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
-        7: "✍️ **Создаю карточку...**\n_Пишу продающее описание_",
+        7: "️ **Создаю карточку...**\n_Пишу продающее описание_",
         8: "✅ **Карточка готова!**\n_Сохраняю и отправляю_"
     }
     
@@ -309,17 +307,24 @@ def is_admin(user_id: int) -> bool:
     """Проверка, является ли пользователь админом"""
     return user_id == ADMIN_ID
 
+async def send_message_safe(update: Update, text: str, reply_markup=None, parse_mode='Markdown'):
+    """Универсальная отправка сообщения — работает и из команды, и из кнопки"""
+    if update.callback_query:
+        await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+
 # ====== Клавиатуры ======
 
 def get_main_keyboard():
     """Главная клавиатура с основными действиями"""
     keyboard = [
         [
-            InlineKeyboardButton("➕ Новая карточка", callback_data="new_card"),
-            InlineKeyboardButton(" Мои карточки", callback_data="my_cards")
+            InlineKeyboardButton(" Новая карточка", callback_data="new_card"),
+            InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")
         ],
         [
-            InlineKeyboardButton("️ Редактировать", callback_data="edit_last"),
+            InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
             InlineKeyboardButton("🖼️ Загрузить фото", callback_data="upload_photo")
         ],
         [
@@ -333,11 +338,11 @@ def get_edit_keyboard():
     keyboard = [
         [
             InlineKeyboardButton("💬 Изменить цвет", callback_data="edit_color"),
-            InlineKeyboardButton(" Изменить ЦА", callback_data="edit_audience")
+            InlineKeyboardButton("👥 Изменить ЦА", callback_data="edit_audience")
         ],
         [
-            InlineKeyboardButton("🔑 Изменить SEO", callback_data="edit_seo"),
-            InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")
+            InlineKeyboardButton(" Изменить SEO", callback_data="edit_seo"),
+            InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")
         ],
         [
             InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")
@@ -363,7 +368,7 @@ def get_admin_keyboard():
     """Клавиатура админ-панели"""
     keyboard = [
         [
-            InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+            InlineKeyboardButton(" Статистика", callback_data="admin_stats"),
             InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")
         ],
         [
@@ -380,14 +385,14 @@ def get_admin_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     stats["total_users"].add(user_id)
     log_action(user_id, "start")
     
     await update.message.reply_text(
         "👋 **Привет! Я AI-бот для создания карточек товаров.**\n\n"
         "Я помогу тебе создать профессиональную карточку для маркетплейса за пару минут!\n\n"
-        " **Ты можешь:**\n"
+        "🎯 **Ты можешь:**\n"
         "• ✍️ Написать текст\n"
         "• 🖼️ Отправить фото товара\n"
         "• 🎤 **Отправить голосовое сообщение** (я распознаю!)\n\n"
@@ -398,7 +403,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /clear"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     if user_id in memory:
         del memory[user_id]
         save_memory(memory)
@@ -412,7 +417,7 @@ async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /newchat"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     if user_id in memory:
         del memory[user_id]
         save_memory(memory)
@@ -426,11 +431,11 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     log_action(user_id, "help")
     
     help_text = """
-🤖 **AI-бот для создания карточек товаров**
+ **AI-бот для создания карточек товаров**
 
 Я помогаю создавать профессиональные карточки для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
 
@@ -443,7 +448,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /mycards — Посмотреть все мои карточки
 """
     
-    # Добавляем админ-команды для админа
     if is_admin(user_id):
         help_text += """
 🔐 **Админ-команды:**
@@ -461,9 +465,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 4. Получи готовую карточку!
 
 🎯 **Пример запроса:** "Напиши карточку для фитнес-браслета"
- **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
+📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
 
-👇 **Выбери действие:**
+ **Выбери действие:**
 """
     await update.message.reply_text(
         help_text,
@@ -473,7 +477,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /edit"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     log_action(user_id, "edit_command")
     
     if user_id not in card_history or len(card_history[user_id]) == 0:
@@ -489,7 +493,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not edit_text:
         await update.message.reply_text(
-            "️ **Редактирование карточки**\n\n"
+            "✏️ **Редактирование карточки**\n\n"
             "Напиши, что нужно изменить. Например:\n\n"
             "• `/edit измени цвет на синий`\n"
             "• `/edit добавь информацию о гарантии`\n"
@@ -535,7 +539,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /mycards"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     log_action(user_id, "mycards")
     
     if user_id not in card_history or len(card_history[user_id]) == 0:
@@ -565,10 +569,10 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /stats - статистика"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ Эта команда доступна только администратору.")
+        await send_message_safe(update, "⛔ Эта команда доступна только администратору.")
         return
     
     log_action(user_id, "stats")
@@ -577,63 +581,50 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
         cursor = conn.cursor()
         
-        # Общее количество действий
         cursor.execute("SELECT COUNT(*) as total FROM user_actions")
         total_actions = cursor.fetchone()['total']
         
-        # Количество уникальных пользователей
         cursor.execute("SELECT COUNT(DISTINCT user_id) as total FROM user_actions")
         total_users = cursor.fetchone()['total']
         
-        # Количество созданных карточек
         cursor.execute("SELECT COUNT(*) as total FROM product_cards")
         total_cards = cursor.fetchone()['total']
         
-        # Действия за сегодня
         cursor.execute("SELECT COUNT(*) as total FROM user_actions WHERE created_at >= CURRENT_DATE")
         today_actions = cursor.fetchone()['total']
         
-        # Карточки за сегодня
         cursor.execute("SELECT COUNT(*) as total FROM product_cards WHERE created_at >= CURRENT_DATE")
         today_cards = cursor.fetchone()['total']
         
         cursor.close()
         conn.close()
         
-        stats_text = f"""
-📊 **Статистика бота**
-
-👥 **Пользователи:**
-• Всего уникальных: {total_users}
-
-📝 **Действия:**
-• Всего действий: {total_actions}
-• Сегодня: {today_actions}
-
-🎴 **Карточки:**
-• Всего создано: {total_cards}
-• Сегодня: {today_cards}
-
-🎤 **Голосовые:** {stats['total_voice']}
-🖼️ **Фото:** {stats['total_photos']}
-
-_Данные обновлены: {datetime.now().strftime('%d.%m.%Y %H:%M')}_
-"""
-        await update.message.reply_text(
-            stats_text,
-            reply_markup=get_admin_keyboard(),
-            parse_mode='Markdown'
+        stats_text = (
+            f"📊 **Статистика бота**\n\n"
+            f"👥 **Пользователи:**\n"
+            f"• Всего уникальных: {total_users}\n\n"
+            f" **Действия:**\n"
+            f"• Всего действий: {total_actions}\n"
+            f"• Сегодня: {today_actions}\n\n"
+            f"🎴 **Карточки:**\n"
+            f"• Всего создано: {total_cards}\n"
+            f"• Сегодня: {today_cards}\n\n"
+            f"🎤 **Голосовые:** {stats['total_voice']}\n"
+            f"🖼️ **Фото:** {stats['total_photos']}\n\n"
+            f"_Данные обновлены: {datetime.now().strftime('%d.%m.%Y %H:%M')}_\n"
         )
+        
+        await send_message_safe(update, stats_text, reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"Ошибка получения статистики: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await send_message_safe(update, f"❌ Ошибка: {str(e)}")
 
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /users - список пользователей"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ Эта команда доступна только администратору.")
+        await send_message_safe(update, " Эта команда доступна только администратору.")
         return
     
     log_action(user_id, "users")
@@ -655,7 +646,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         if not rows:
-            await update.message.reply_text("📭 Пользователей пока нет.")
+            await send_message_safe(update, "📭 Пользователей пока нет.")
             return
         
         message = "👥 **Топ-20 пользователей:**\n\n"
@@ -663,21 +654,17 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_action = row['last_action'].strftime('%d.%m %H:%M') if row['last_action'] else 'неизвестно'
             message += f"**{i}.** ID: `{row['user_id']}` — {row['actions_count']} действий (последнее: {last_action})\n"
         
-        await update.message.reply_text(
-            message,
-            reply_markup=get_admin_keyboard(),
-            parse_mode='Markdown'
-        )
+        await send_message_safe(update, message, reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"Ошибка получения списка пользователей: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await send_message_safe(update, f"❌ Ошибка: {str(e)}")
 
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /top - топ популярных товаров"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ Эта команда доступна только администратору.")
+        await send_message_safe(update, "⛔ Эта команда доступна только администратору.")
         return
     
     log_action(user_id, "top")
@@ -700,7 +687,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         
         if not rows:
-            await update.message.reply_text("📭 Топ товаров пока пуст.")
+            await send_message_safe(update, "📭 Топ товаров пока пуст.")
             return
         
         message = "🔥 **Топ-10 товаров:**\n\n"
@@ -708,21 +695,17 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             preview = row['details'][:60] + "..." if len(row['details']) > 60 else row['details']
             message += f"**{i}.** {preview} — создано: {row['count']} раз(а)\n\n"
         
-        await update.message.reply_text(
-            message,
-            reply_markup=get_admin_keyboard(),
-            parse_mode='Markdown'
-        )
+        await send_message_safe(update, message, reply_markup=get_admin_keyboard())
     except Exception as e:
         logger.error(f"Ошибка получения топа: {e}")
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await send_message_safe(update, f" Ошибка: {str(e)}")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /admin - админ-панель"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ Эта команда доступна только администратору.")
+        await send_message_safe(update, "⛔ Эта команда доступна только администратору.")
         return
     
     log_action(user_id, "admin_panel")
@@ -738,7 +721,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик загрузки фото"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     stats["total_photos"] += 1
     log_action(user_id, "photo")
     
@@ -751,7 +734,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     
     await update.message.reply_text(
-        "️ **Фото получено!**\n\n"
+        "🖼️ **Фото получено!**\n\n"
         "Пожалуйста, укажи детали (можно текстом или голосом):\n"
         "• Цвет/версия\n"
         "• Целевая аудитория\n"
@@ -800,11 +783,11 @@ async def fill_photo_details(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик голосовых сообщений"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     stats["total_voice"] += 1
     log_action(user_id, "voice")
     
-    status_msg = await update.message.reply_text("🎤 **Распознаю голосовое сообщение...**\n_Подожди несколько секунд_", parse_mode='Markdown')
+    status_msg = await update.message.reply_text(" **Распознаю голосовое сообщение...**\n_Подожди несколько секунд_", parse_mode='Markdown')
     
     voice_file = await update.message.voice.get_file()
     
@@ -889,7 +872,7 @@ async def process_user_input(update: Update, user_id: int, user_message: str):
                 await update.message.reply_text(
                     f"🙏 **Спасибо за ответ!**\n\n"
                     f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
-                    f"️ **Не хватает:** {', '.join(missing)}\n\n"
+                    f"⚠️ **Не хватает:** {', '.join(missing)}\n\n"
                     f"💡 **Пример хорошего ответа:**\n"
                     f"«1. Цвет: чёрные, с микрофоном\n"
                     f"2. Для кого: для спортсменов и любителей музыки\n"
@@ -939,7 +922,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     elif data == "admin_logs":
         if not is_admin(user_id):
-            await query.edit_message_text("⛔ Доступ запрещён.")
+            await query.edit_message_text(" Доступ запрещён.")
             return
         await query.edit_message_text(
             "📜 **Логи действий**\n\n"
@@ -993,7 +976,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data == "edit_audience":
         await query.edit_message_text(
-            "👥 **Изменение целевой аудитории**\n\n"
+            " **Изменение целевой аудитории**\n\n"
             "Напиши или надиктуй, для кого предназначен товар. Например:\n"
             "• \"для спортсменов\"\n"
             "• \"для геймеров 18+\"\n"
@@ -1067,7 +1050,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик обычных текстовых сообщений"""
-    user_id = update.message.from_user.id
+    user_id = update.effective_user.id
     user_message = update.message.text
     
     await process_user_input(update, user_id, user_message)
