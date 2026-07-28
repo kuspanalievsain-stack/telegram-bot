@@ -1,335 +1,799 @@
 import os
 import json
-import requests
 import logging
-import subprocess
-from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from groq import Groq
+import psycopg
+from psycopg.rows import dict_row
+from dotenv import load_dotenv
+from io import BytesIO
 
-# ===== НАСТРОЙКИ =====
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Загрузка переменных окружения
+load_dotenv()
 
-if not TOKEN or not GROQ_API_KEY:
-    raise ValueError("Не установлены TELEGRAM_TOKEN или GROQ_API_KEY")
-
-client = Groq(api_key=GROQ_API_KEY)
-
-# Твой Telegram ID (ЗАМЕНИ НА СВОЙ!)
-ADMIN_ID = "501464319"
-
-# Файлы
-MEMORY_FILE = "memory.json"
-USERS_FILE = "users.json"
-LOG_FILE = "bot.log"
-
-# ===== ЛОГИРОВАНИЕ =====
+# Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ===== ФУНКЦИИ =====
-def load_json(filename):
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return {}
-    return {}
+# Инициализация Groq
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+# Память для хранения истории сообщений
+memory = {}
 
-def log_action(user_id, username, action):
-    logger.info(f"User {user_id} ({username}) - {action}")
+# История карточек для каждого пользователя
+card_history = {}
 
-user_memory = load_json(MEMORY_FILE)
-users_db = load_json(USERS_FILE)
+# Хранение изображений
+pending_photos = {}
 
-def is_admin(user_id):
-    return str(user_id) == ADMIN_ID
+def load_memory():
+    """Загрузка памяти из базы данных"""
+    global card_history
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        
+        cursor.execute("CREATE TABLE IF NOT EXISTS user_memory (user_id BIGINT PRIMARY KEY, history JSONB)")
+        cursor.execute("SELECT user_id, history FROM user_memory")
+        rows = cursor.fetchall()
+        for row in rows:
+            memory[row['user_id']] = row['history']
+        
+        cursor.execute("CREATE TABLE IF NOT EXISTS product_cards (id SERIAL PRIMARY KEY, user_id BIGINT, card_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("SELECT user_id, card_text FROM product_cards ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        for row in rows:
+            if row['user_id'] not in card_history:
+                card_history[row['user_id']] = []
+            card_history[row['user_id']].append(row['card_text'])
+        
+        cursor.close()
+        conn.close()
+        logger.info("Память загружена из базы данных")
+    except Exception as e:
+        logger.error(f"Ошибка загрузки памяти: {e}")
 
-# ===== КОМАНДЫ =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
+def save_memory(memory_dict):
+    """Сохранение памяти в базу данных"""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS user_memory (user_id BIGINT PRIMARY KEY, history JSONB)")
+        for user_id, history in memory_dict.items():
+            cursor.execute(
+                "INSERT INTO user_memory (user_id, history) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET history = %s",
+                (user_id, json.dumps(history), json.dumps(history))
+            )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения памяти: {e}")
+
+def save_card(user_id, card_text):
+    """Сохранение карточки в базу данных"""
+    try:
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS product_cards (id SERIAL PRIMARY KEY, user_id BIGINT, card_text TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute(
+            "INSERT INTO product_cards (user_id, card_text) VALUES (%s, %s)",
+            (user_id, card_text)
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        if user_id not in card_history:
+            card_history[user_id] = []
+        card_history[user_id].append(card_text)
+        
+        logger.info(f"Карточка сохранена для пользователя {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка сохранения карточки: {e}")
+
+async def show_progress(update: Update, step: int, total_steps: int):
+    """Показывает прогресс создания карточки"""
+    progress_messages = {
+        1: "⏳ **Анализирую запрос...**\n_Понимаю, что нужно описать_",
+        2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
+        3: "✍️ **Задаю вопросы...**\n_Нужно уточнить детали_",
+        4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
+        5: "🔍 **Проверяю ответы...**\n_Анализирую информацию_",
+        6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
+        7: "✍️ **Создаю карточку...**\n_Пишу продающее описание_",
+        8: "✅ **Карточка готова!**\n_Сохраняю и отправляю_"
+    }
     
-    if user_id not in users_db:
-        users_db[user_id] = {
-            "username": username,
-            "first_seen": datetime.now().isoformat(),
-            "last_seen": datetime.now().isoformat(),
-            "message_count": 0
-        }
-        save_json(USERS_FILE, users_db)
-        log_action(user_id, username, "FIRST JOIN")
+    if step in progress_messages:
+        progress_bar = "█" * step + "░" * (total_steps - step)
+        message = f"**Прогресс:** [{progress_bar}] {step}/{total_steps}\n\n{progress_messages[step]}"
+        await update.message.reply_text(message, parse_mode='Markdown')
+        await asyncio.sleep(0.5)
+
+async def transcribe_voice(voice_file):
+    """Распознавание голосового сообщения через Groq Whisper"""
+    try:
+        voice_data = await voice_file.download_as_bytearray()
+        voice_file_obj = BytesIO(voice_data)
+        voice_file_obj.name = "voice.ogg"
+        
+        transcription = client.audio.transcriptions.create(
+            file=voice_file_obj,
+            model="whisper-large-v3-turbo",
+            language="ru"
+        )
+        
+        return transcription.text
+    except Exception as e:
+        logger.error(f"Ошибка распознавания голоса: {e}")
+        return None
+
+def get_ai_response(user_id, user_message, photo_analysis=""):
+    """Получение ответа от AI с системным промптом"""
+    if user_id not in memory:
+        memory[user_id] = []
     
-    users_db[user_id]["last_seen"] = datetime.now().isoformat()
-    save_json(USERS_FILE, users_db)
+    if photo_analysis:
+        memory[user_id].append({"role": "user", "content": f"На изображении видно: {photo_analysis}"})
     
-    await update.message.reply_text(
-        "👋 Привет! Я ИИ-бот с памятью.\n\n"
-        " Просто пиши мне — я запомню наш разговор.\n"
-        "🎨 /gen <описание> — сгенерирую картинку\n"
-        "🎤 Отправь голосовое — распознаю речь\n"
-        " /clear — очистить память\n"
-        "📋 /help — помощь"
+    memory[user_id].append({"role": "user", "content": user_message})
+    
+    if len(memory[user_id]) > 10:
+        memory[user_id] = memory[user_id][-10:]
+    
+    try:
+        system_prompt = """Ты — профессиональный копирайтер для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
+
+ПРАВИЛА РАБОТЫ:
+1. НИКОГДА не пиши карточку сразу при первом запросе.
+2. ВСЕГДА сначала задай пользователю 3 уточняющих вопроса:
+   - Какой цвет, размер или версия товара?
+   - Для какой целевой аудитории товар (дети, взрослые, профессионалы, любители)?
+   - Есть ли ключевые SEO-слова или особенности, которые нужно включить?
+3. Жди ответов на все 3 вопроса.
+4. Только после получения ответов создавай карточку.
+
+ФОРМАТ КАРТОЧКИ (строго придерживайся):
+
+**Название:** [Краткое, цепляющее название с ключевыми словами]
+
+**Описание:** [2-3 предложения о товаре, его преимуществах и пользе для покупателя]
+
+**Характеристики:**
+- **Параметр 1:** значение
+- **Параметр 2:** значение
+- **Параметр 3:** значение
+
+**Функции и преимущества:**
+- **Функция 1:** краткое описание
+- **Функция 2:** краткое описание
+
+**Для кого подходит:** [описание целевой аудитории]
+
+**SEO-ключи:** [список ключевых слов через запятую]
+
+СТИЛЬ:
+- Пиши на русском языке
+- Используй продающие формулировки
+- Будь конкретен (цифры, факты)
+- Избегай воды и общих фраз
+- Используй эмодзи умеренно (1-2 на раздел)"""
+        
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                *memory[user_id]
+            ]
+        )
+        
+        ai_message = response.choices[0].message.content
+        memory[user_id].append({"role": "assistant", "content": ai_message})
+        save_memory(memory)
+        
+        save_card(user_id, ai_message)
+        
+        return ai_message
+    except Exception as e:
+        logger.error(f"Ошибка при получении ответа от AI: {e}")
+        return f"Ошибка: {str(e)}"
+
+# ====== Вспомогательные функции ======
+
+async def send_long_message(update: Update, text: str, reply_markup=None):
+    """Отправка длинного сообщения с разбиением на части"""
+    max_length = 4000
+    
+    if len(text) <= max_length:
+        if reply_markup:
+            await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(text, parse_mode='Markdown')
+        return
+    
+    parts = []
+    while len(text) > max_length:
+        split_pos = text.rfind('\n\n', 0, max_length)
+        if split_pos == -1:
+            split_pos = text.rfind('\n', 0, max_length)
+        if split_pos == -1:
+            split_pos = max_length
+        
+        parts.append(text[:split_pos])
+        text = text[split_pos:].lstrip()
+    
+    if text:
+        parts.append(text)
+    
+    for i, part in enumerate(parts):
+        if i == len(parts) - 1 and reply_markup:
+            await update.message.reply_text(part, reply_markup=reply_markup, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(part, parse_mode='Markdown')
+
+# ====== Клавиатуры ======
+
+def get_main_keyboard():
+    """Главная клавиатура с основными действиями"""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Новая карточка", callback_data="new_card"),
+            InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")
+        ],
+        [
+            InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
+            InlineKeyboardButton("🖼️ Загрузить фото", callback_data="upload_photo")
+        ],
+        [
+            InlineKeyboardButton("❓ Помощь", callback_data="help")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_edit_keyboard():
+    """Клавиатура для редактирования"""
+    keyboard = [
+        [
+            InlineKeyboardButton("💬 Изменить цвет", callback_data="edit_color"),
+            InlineKeyboardButton("👥 Изменить ЦА", callback_data="edit_audience")
+        ],
+        [
+            InlineKeyboardButton("🔑 Изменить SEO", callback_data="edit_seo"),
+            InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")
+        ],
+        [
+            InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_help_keyboard():
+    """Клавиатура для справки"""
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Создать карточку", callback_data="new_card"),
+            InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")
+        ],
+        [
+            InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
+            InlineKeyboardButton("🖼️ Загрузить фото", callback_data="upload_photo")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+# ====== Общая логика обработки сообщения ======
+
+async def process_user_input(update: Update, user_id: int, user_message: str):
+    """Общая функция обработки текста (используется и для текста, и для распознанного голоса)"""
+    user_message_lower = user_message.lower()
+    
+    # Проверяем, есть ли у пользователя незавершённый диалог
+    if user_id in memory and len(memory[user_id]) > 0:
+        last_ai_message = ""
+        for msg in reversed(memory[user_id]):
+            if msg["role"] == "assistant":
+                last_ai_message = msg["content"]
+                break
+        
+        if "вопрос" in last_ai_message.lower() or "уточнить" in last_ai_message.lower() or "детал" in last_ai_message.lower():
+            
+            await show_progress(update, 5, 8)
+            
+            color_words = ["цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", 
+                          "премиум", "базов", "стандарт", "размер", "s", "m", "l", "xl",
+                          "накладн", "вкладыш", "проводн", "безпроводн", "микрофон",
+                          "жёлт", "оранж", "фиолет", "розов", "сер", "коричн",
+                          "золот", "серебр", "металл", "пластик", "силикон", "кож",
+                          "универс", "унисекс", "мужск", "женск"]
+            has_color = any(word in user_message_lower for word in color_words)
+            
+            audience_words = ["аудитори", "спортсмен", "дет", "взросл", "професс", 
+                             "любитель", "геймер", "музык", "фитнес", "бег", "трениров",
+                             "офис", "работ", "дом", "улица", "18+", "16+", "подрост",
+                             "мужчин", "женщин", "универсал", "все", "кажд", "пользовател",
+                             "клиент", "покупател", "люди", "человек", "парень", "девушк",
+                             "мальчик", "девочк", "студент", "школьник", "пенсионер",
+                             "мам", "пап", "ребён", "семь", "активн", "начинающ", "опытн"]
+            has_audience = any(word in user_message_lower for word in audience_words)
+            
+            seo_words = ["seo", "ключ", "водостойк", "мониторинг", "отслеживан", "шаг",
+                        "пульс", "сердечн", "ритм", "bluetooth", "wifi", "gps", "наушник",
+                        "звук", "бас", "шум", "автоном", "батаре", "заряд", "время",
+                        "работа", "поддержк", "совместим", "android", "ios", "iphone",
+                        "качество", "hi", "hd", "стерео", "мощн", "громк", "тих",
+                        "функци", "возможност", "особенност", "характеристик", "параметр",
+                        "давлен", "калори", "сон", "активн", "тренировк", "упражнен",
+                        "бего", "плаван", "велосипед", "ходьб", "прыжк", "йога",
+                        "лёгк", "тяжёл", "компакт", "удобн", "прочн", "надёжн",
+                        "быстр", "медлен", "точн", "умн", "интеллек", "автомат"]
+            has_seo = any(word in user_message_lower for word in seo_words)
+            
+            missing = []
+            if not has_color:
+                missing.append("цвет/версию/размер")
+            if not has_audience:
+                missing.append("целевую аудиторию")
+            if not has_seo:
+                missing.append("ключевые особенности/функции")
+            
+            if missing:
+                keyboard = [
+                    [InlineKeyboardButton("💡 Пример ответа", callback_data="show_example")],
+                    [InlineKeyboardButton("️ Назад", callback_data="back_to_main")]
+                ]
+                await update.message.reply_text(
+                    f"🙏 **Спасибо за ответ!**\n\n"
+                    f"Чтобы создать идеальную карточку, мне нужно ещё немного информации:\n\n"
+                    f"⚠️ **Не хватает:** {', '.join(missing)}\n\n"
+                    f"💡 **Пример хорошего ответа:**\n"
+                    f"«1. Цвет: чёрные, с микрофоном\n"
+                    f"2. Для кого: для спортсменов и любителей музыки\n"
+                    f"3. Особенности: водостойкие, Bluetooth 5.0, автономность 20 часов»",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode='Markdown'
+                )
+                return
+            
+            await show_progress(update, 6, 8)
+            await show_progress(update, 7, 8)
+    
+    await update.message.chat.send_action(action="typing")
+    
+    await show_progress(update, 1, 8)
+    await show_progress(update, 2, 8)
+    
+    ai_response = get_ai_response(user_id, user_message)
+    
+    await show_progress(update, 8, 8)
+    
+    await send_long_message(
+        update,
+        ai_response,
+        reply_markup=get_main_keyboard()
     )
-    log_action(user_id, username, "START")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ====== Обработчики команд ======
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
     await update.message.reply_text(
-        "🤖 **Мои возможности:**\n\n"
-        "💬 **Обычный чат** — пиши что угодно, я запомню контекст\n"
-        " **/gen <текст>** — сгенерирую изображение по описанию\n"
-        "🎤 **Голосовые сообщения** — распознаю речь и отвечу\n"
-        "🗑 **/clear** — очистить историю разговора\n\n"
-        "💡 Примеры:\n"
-        "• /gen кот в космосе\n"
-        "• /gen закат над морем\n"
-        "• Просто напиши или отправь голосовое!",
-        parse_mode="Markdown"
+        "👋 **Привет! Я AI-бот для создания карточек товаров.**\n\n"
+        "Я помогу тебе создать профессиональную карточку для маркетплейса за пару минут!\n\n"
+        "🎯 **Ты можешь:**\n"
+        "• ✍️ Написать текст\n"
+        "• 🖼️ Отправить фото товара\n"
+        "• 🎤 **Отправить голосовое сообщение** (я распознаю!)\n\n"
+        "👇 **Выбери действие:**",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
     )
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if user_id in user_memory:
-        del user_memory[user_id]
-        save_json(MEMORY_FILE, user_memory)
-        await update.message.reply_text("🗑 Память очищена!")
-    else:
-        await update.message.reply_text("Память уже пуста.")
+    """Обработчик команды /clear"""
+    user_id = update.message.from_user.id
+    if user_id in memory:
+        del memory[user_id]
+        save_memory(memory)
+    await update.message.reply_text(
+        "✅ **Память очищена!**\n\n"
+        "Теперь мы начнём с чистого листа. Что будем создавать?",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
 
-async def generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    prompt = " ".join(context.args) if context.args else None
-    
-    if not prompt:
-        await update.message.reply_text("❗ Укажи описание: /gen <что нарисовать>")
-        return
-    
-    await update.message.reply_text(f"🎨 Генерирую: {prompt}...")
-    
-    try:
-        encoded_prompt = requests.utils.quote(prompt)
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
-        await update.message.reply_photo(photo=image_url, caption=f"✅ Готово!\nЗапрос: {prompt}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка генерации: {str(e)}")
+async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /newchat"""
+    user_id = update.message.from_user.id
+    if user_id in memory:
+        del memory[user_id]
+        save_memory(memory)
+    await update.message.reply_text(
+        "🔄 **Начинаем новый диалог!**\n\n"
+        "Напиши, какой товар нужно описать, или выбери действие:",
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Эта команда доступна только администратору.")
-        return
-    
-    total_users = len(users_db)
-    today = datetime.now().date().isoformat()
-    
-    active_today = sum(1 for data in users_db.values() 
-                       if data.get("last_seen", "").startswith(today))
-    total_messages = sum(data.get("message_count", 0) for data in users_db.values())
-    
-    stats_text = f"""
- **Статистика бота:**
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
+    help_text = """
+🤖 **AI-бот для создания карточек товаров**
 
- **Всего пользователей:** {total_users}
-🟢 **Активных сегодня:** {active_today}
-💬 **Всего сообщений:** {total_messages}
+Я помогаю создавать профессиональные карточки для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
 
-📅 **Дата:** {datetime.now().strftime('%d.%m.%Y %H:%M')}
+ **Доступные команды:**
+/start — Приветствие и начало работы
+/help — Показать эту справку
+/newchat — Начать новый диалог
+/clear — Очистить историю сообщений
+/edit — Редактировать последнюю карточку
+/mycards — Посмотреть все мои карточки
+
+💡 **Как работать со мной:**
+1. Напиши текст, отправь фото или **голосовое сообщение**
+2. Я задам 3 уточняющих вопроса
+3. Ответь на вопросы (можно тоже голосом!)
+4. Получи готовую карточку!
+
+🎯 **Пример запроса:** "Напиши карточку для фитнес-браслета"
+📝 **Пример ответа:** "1. Чёрный, премиум. 2. Для спортсменов. 3. Водостойкий, Bluetooth 5.0"
+
+👇 **Выбери действие:**
 """
-    await update.message.reply_text(stats_text, parse_mode="Markdown")
+    await update.message.reply_text(
+        help_text,
+        reply_markup=get_help_keyboard(),
+        parse_mode='Markdown'
+    )
 
-async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /edit"""
+    user_id = update.message.from_user.id
     
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Эта команда доступна только администратору.")
-        return
-    
-    if not users_db:
-        await update.message.reply_text("📭 База пользователей пуста.")
-        return
-    
-    users_list = "👥 **Пользователи:**\n\n"
-    for uid, data in users_db.items():
-        username = data.get("username", "unknown")
-        first_seen = data.get("first_seen", "unknown")[:10]
-        msg_count = data.get("message_count", 0)
-        users_list += f"• @{username} (ID: {uid})\n  Первое посещение: {first_seen}\n  Сообщений: {msg_count}\n\n"
-    
-    if len(users_list) > 4000:
-        users_list = users_list[:4000] + "\n... (список обрезан)"
-    
-    await update.message.reply_text(users_list, parse_mode="Markdown")
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Эта команда доступна только администратору.")
-        return
-    
-    message = " ".join(context.args) if context.args else None
-    
-    if not message:
-        await update.message.reply_text("❗ Укажи текст: /broadcast <сообщение>")
-        return
-    
-    await update.message.reply_text(f"📢 Начинаю рассылку: {message[:50]}...")
-    
-    success_count = 0
-    fail_count = 0
-    
-    for uid in users_db.keys():
-        try:
-            await context.bot.send_message(chat_id=uid, text=message)
-            success_count += 1
-        except Exception as e:
-            fail_count += 1
-            logger.error(f"Broadcast failed to {uid}: {e}")
-    
-    await update.message.reply_text(f"✅ Рассылка завершена!\n\n Успешно: {success_count}\n❌ Ошибок: {fail_count}")
-
-# ===== ОБРАБОТКА СООБЩЕНИЙ =====
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
-    
-    await update.message.reply_text("🎤 Распознаю голосовое сообщение...")
-    log_action(user_id, username, "VOICE_MESSAGE")
-    
-    ogg_path = f"voice_{user_id}_{int(datetime.now().timestamp())}.ogg"
-    mp3_path = ogg_path.replace(".ogg", ".mp3")
-    
-    try:
-        voice = update.message.voice
-        voice_file = await context.bot.get_file(voice.file_id)
-        await voice_file.download_to_drive(ogg_path)
-        
-        result = subprocess.run(
-            ["ffmpeg", "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", mp3_path],
-            capture_output=True,
-            text=True,
-            timeout=30
+    if user_id not in card_history or len(card_history[user_id]) == 0:
+        await update.message.reply_text(
+            "😕 **У тебя ещё нет созданных карточек.**\n\n"
+            "Сначала создай карточку, а потом редактируй её!",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
         )
-        
-        if result.returncode != 0:
-            raise Exception(f"ffmpeg error: {result.stderr}")
-        
-        with open(mp3_path, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio_file,
-                language="ru"
-            )
-        
-        recognized_text = transcript.text
-        await update.message.reply_text(f"📝 Распознано: {recognized_text}")
-        log_action(user_id, username, f"VOICE TRANSCRIBED: {recognized_text[:50]}")
-        
-        await process_message(update, context, recognized_text, user_id, username)
-        
-    except subprocess.TimeoutExpired:
-        await update.message.reply_text("️ Превышено время обработки.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка распознавания: {str(e)}")
-        logger.error(f"Voice recognition error: {e}")
-    finally:
-        for path in [ogg_path, mp3_path]:
-            if os.path.exists(path):
-                os.remove(path)
+        return
+    
+    edit_text = " ".join(context.args) if context.args else ""
+    
+    if not edit_text:
+        await update.message.reply_text(
+            "✏️ **Редактирование карточки**\n\n"
+            "Напиши, что нужно изменить. Например:\n\n"
+            "• `/edit измени цвет на синий`\n"
+            "• `/edit добавь информацию о гарантии`\n"
+            "• `/edit сделай описание короче`\n\n"
+            "Или выбери быстрое действие:",
+            reply_markup=get_edit_keyboard(),
+            parse_mode='Markdown'
+        )
+        return
+    
+    last_card = card_history[user_id][-1]
+    
+    await update.message.chat.send_action(action="typing")
+    
+    edit_prompt = f"""Ты — профессиональный копирайтер. 
 
-async def process_message(update, context, user_message, user_id, username):
-    if user_id in users_db:
-        users_db[user_id]["message_count"] = users_db[user_id].get("message_count", 0) + 1
-        users_db[user_id]["last_seen"] = datetime.now().isoformat()
-        save_json(USERS_FILE, users_db)
-    
-    if user_id not in user_memory:
-        user_memory[user_id] = []
-    
-    user_memory[user_id].append({"role": "user", "content": user_message})
-    if len(user_memory[user_id]) > 20:
-        user_memory[user_id] = user_memory[user_id][-20:]
+Вот последняя созданная карточка:
+{last_card}
+
+Пользователь просит внести следующие изменения: {edit_text}
+
+Внеси изменения в карточку, сохранив общий стиль и формат. Верни полную обновлённую карточку."""
     
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=user_memory[user_id],
-            max_tokens=1000,
-            temperature=0.7
+            messages=[{"role": "user", "content": edit_prompt}]
         )
         
-        bot_reply = response.choices[0].message.content
-        user_memory[user_id].append({"role": "assistant", "content": bot_reply})
-        save_json(MEMORY_FILE, user_memory)
-        await update.message.reply_text(bot_reply)
-        log_action(user_id, username, f"MESSAGE: {user_message[:50]}")
+        edited_card = response.choices[0].message.content
         
+        save_card(user_id, edited_card)
+        
+        await send_long_message(
+            update,
+            "✅ **Карточка обновлена!**\n\n" + edited_card,
+            reply_markup=get_main_keyboard()
+        )
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-        logger.error(f"Chat error: {e}")
+        logger.error(f"Ошибка при редактировании: {e}")
+        await update.message.reply_text(f"❌ Ошибка при редактировании: {str(e)}")
+
+async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /mycards"""
+    user_id = update.message.from_user.id
+    
+    if user_id not in card_history or len(card_history[user_id]) == 0:
+        await update.message.reply_text(
+            "📭 **У тебя ещё нет созданных карточек.**\n\n"
+            "Создай первую карточку, и она появится здесь!",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+        return
+    
+    cards = card_history[user_id][-5:]
+    
+    message = f"📋 **Твои последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
+    
+    for i, card in enumerate(reversed(cards), 1):
+        preview = card[:150].replace("\n", " ").replace("**", "") + "..." if len(card) > 150 else card
+        message += f"**{i}.** {preview}\n\n"
+    
+    await update.message.reply_text(
+        message,
+        reply_markup=get_main_keyboard(),
+        parse_mode='Markdown'
+    )
+
+# ====== Обработчик загрузки фото ======
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик загрузки фото"""
+    user_id = update.message.from_user.id
+    
+    photo_file = await update.message.photo[-1].get_file()
+    photo_data = await photo_file.download_as_bytearray()
+    
+    pending_photos[user_id] = {
+        "photo_data": photo_data,
+        "timestamp": update.message.date
+    }
+    
+    await update.message.reply_text(
+        "🖼️ **Фото получено!**\n\n"
+        "Пожалуйста, укажи детали (можно текстом или голосом):\n"
+        "• Цвет/версия\n"
+        "• Целевая аудитория\n"
+        "• Особенности/SEO-ключи\n\n"
+        "Например:\n"
+        "«1. Чёрные накладные\n"
+        "2. Для спортсменов и геймеров\n"
+        "3. Водостойкие, Bluetooth 5.0»",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("👉 Заполнить детали", callback_data="fill_photo_details")]
+        ])
+    )
+
+async def fill_photo_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Заполнение деталей после загрузки фото"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    
+    if user_id not in pending_photos:
+        await query.edit_message_text(
+            "⚠️ **Фото не найдено!**\n\n"
+            "Пожалуйста, загрузи фото заново.",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+        return
+    
+    await query.edit_message_text(
+        "🖼️ **Заполнение деталей**\n\n"
+        "Пожалуйста, укажи детали (можно текстом или голосом):\n"
+        "• Цвет/версия\n"
+        "• Целевая аудитория\n"
+        "• Особенности/SEO-ключи\n\n"
+        "Например:\n"
+        "«1. Чёрные накладные\n"
+        "2. Для спортсменов и геймеров\n"
+        "3. Водостойкие, Bluetooth 5.0»",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("️ Назад", callback_data="back_to_main")]
+        ])
+    )
+
+# ======  Обработчик голосовых сообщений ======
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик голосовых сообщений"""
+    user_id = update.message.from_user.id
+    
+    # Показываем, что распознаём
+    status_msg = await update.message.reply_text("🎤 **Распознаю голосовое сообщение...**\n_Подожди несколько секунд_", parse_mode='Markdown')
+    
+    # Получаем файл голосового сообщения
+    voice_file = await update.message.voice.get_file()
+    
+    # Распознаём через Groq Whisper
+    recognized_text = await transcribe_voice(voice_file)
+    
+    if recognized_text is None:
+        await status_msg.edit_text(
+            " **Не удалось распознать голос.**\n\n"
+            "Попробуй ещё раз или напиши текст.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Показываем распознанный текст
+    await status_msg.edit_text(
+        f"✅ **Распознал:**\n\n\"{recognized_text}\"\n\n_Обрабатываю..._",
+        parse_mode='Markdown'
+    )
+    
+    # Обрабатываем распознанный текст как обычное сообщение
+    await process_user_input(update, user_id, recognized_text)
+
+# ====== Обработчик callback-запросов (кнопки) ======
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на инлайн-кнопки"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    data = query.data
+    
+    if data == "new_card":
+        await query.edit_message_text(
+            "➕ **Новая карточка**\n\n"
+            "Напиши, какой товар нужно описать (текстом или голосом). Например:\n"
+            "• \"Напиши карточку для наушников\"\n"
+            "• \"Создай карточку для фитнес-браслета\"\n"
+            "• \"Опиши умные часы\""
+        )
+    
+    elif data == "my_cards":
+        await mycards_command(update, context)
+    
+    elif data == "edit_last":
+        if user_id not in card_history or len(card_history[user_id]) == 0:
+            await query.edit_message_text(
+                "😕 **У тебя ещё нет карточек для редактирования.**\n\n"
+                "Сначала создай карточку!",
+                reply_markup=get_main_keyboard(),
+                parse_mode='Markdown'
+            )
+        else:
+            await query.edit_message_text(
+                "✏️ **Редактирование последней карточки**\n\n"
+                "Напиши, что нужно изменить (текстом или голосом). Например:\n"
+                "• \"измени цвет на синий\"\n"
+                "• \"добавь информацию о гарантии\"\n"
+                "• \"сделай описание короче\"\n\n"
+                "Или выбери быстрое действие:",
+                reply_markup=get_edit_keyboard(),
+                parse_mode='Markdown'
+            )
+    
+    elif data == "edit_color":
+        await query.edit_message_text(
+            "🎨 **Изменение цвета**\n\n"
+            "Напиши или надиктуй, какой цвет должен быть у товара. Например:\n"
+            "• \"синий\"\n"
+            "• \"чёрный матовый\"\n"
+            "• \"белый с золотыми вставками\""
+        )
+    
+    elif data == "edit_audience":
+        await query.edit_message_text(
+            "👥 **Изменение целевой аудитории**\n\n"
+            "Напиши или надиктуй, для кого предназначен товар. Например:\n"
+            "• \"для спортсменов\"\n"
+            "• \"для геймеров 18+\"\n"
+            "• \"для детей от 6 лет\""
+        )
+    
+    elif data == "edit_seo":
+        await query.edit_message_text(
+            " **Изменение SEO-ключей**\n\n"
+            "Напиши или надиктуй ключевые слова. Например:\n"
+            "• \"водостойкий, Bluetooth 5.0\"\n"
+            "• \"автономность 20 часов\"\n"
+            "• \"шумоподавление\""
+        )
+    
+    elif data == "edit_custom":
+        await query.edit_message_text(
+            "📝 **Свой запрос на редактирование**\n\n"
+            "Напиши или надиктуй, что нужно изменить. Например:\n"
+            "• \"добавь раздел про гарантию\"\n"
+            "• \"сделай описание более продающим\"\n"
+            "• \"убери технические характеристики\""
+        )
+    
+    elif data == "help":
+        await help_command(update, context)
+    
+    elif data == "back_to_main":
+        await query.edit_message_text(
+            "🏠 **Главное меню**\n\n"
+            "Что будем делать?",
+            reply_markup=get_main_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    elif data == "upload_photo":
+        await query.edit_message_text(
+            "🖼️ **Загрузка фото**\n\n"
+            "Пожалуйста, загрузи фото товара. Я проанализирую его и создам карточку!\n\n"
+            "💡 **Важно:**\n"
+            "• Загружай фото в хорошем качестве\n"
+            "• Не используй скриншоты экрана\n"
+            "• Убедись, что товар хорошо виден"
+        )
+    
+    elif data == "fill_photo_details":
+        await fill_photo_details(update, context)
+
+# ====== Обработчик примера ответа ======
+
+async def show_example_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать пример хорошего ответа"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "💡 **Пример хорошего ответа:**\n\n"
+        "«1. **Цвет:** чёрные, с микрофоном\n"
+        "2. **Для кого:** для спортсменов и любителей музыки\n"
+        "3. **Особенности:** водостойкие, Bluetooth 5.0, автономность 20 часов»\n\n"
+        "Напиши свой ответ в таком же формате! 👇\n\n"
+        "_Можно текстом или голосом 🎤_",
+        parse_mode='Markdown'
+    )
+
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
+    logger.error(f"Update {update} caused error {context.error}")
+
+# ====== Обработчик обычных текстовых сообщений ======
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username or "unknown"
-    await process_message(update, context, update.message.text, user_id, username)
-
-# ===== ЗАПУСК БОТА =====
-async def post_init(application):
-    """Инициализация после создания приложения"""
-    logger.info("✅ Инициализация бота...")
-    # Удаляем webhook, чтобы избежать конфликта 409
-    await application.bot.delete_webhook()
-    logger.info("✅ Webhook удалён")
+    """Обработчик обычных текстовых сообщений"""
+    user_id = update.message.from_user.id
+    user_message = update.message.text
+    
+    await process_user_input(update, user_id, user_message)
 
 def main():
-    """Основная функция"""
-    try:
-        logger.info("🤖 Создаю приложение...")
-        
-        # Создаём приложение с post_init для удаления webhook
-        application = Application.builder().token(TOKEN).post_init(post_init).build()
-        
-        logger.info("📝 Регистрирую обработчики...")
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("clear", clear))
-        application.add_handler(CommandHandler("gen", generate_image))
-        application.add_handler(CommandHandler("stats", stats_command))
-        application.add_handler(CommandHandler("users", users_command))
-        application.add_handler(CommandHandler("broadcast", broadcast_command))
-        application.add_handler(MessageHandler(filters.VOICE, handle_voice))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        logger.info("🚀 Запускаю polling...")
-        logger.info("🤖 Бот запущен и готов к работе!")
-        
-        # Запуск polling (blocking)
-        application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            timeout=30,
-            drop_pending_updates=True
-        )
-        
-    except KeyboardInterrupt:
-        logger.info(" Бот остановлен пользователем")
-    except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {e}", exc_info=True)
-        raise
+    """Запуск бота"""
+    load_memory()
+    
+    application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
+    
+    # Регистрация обработчиков команд
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("clear", clear))
+    application.add_handler(CommandHandler("newchat", newchat))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("edit", edit_command))
+    application.add_handler(CommandHandler("mycards", mycards_command))
+    
+    # Регистрация обработчика callback-запросов (кнопки)
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(CallbackQueryHandler(show_example_callback, pattern="^show_example$"))
+    
+    # Регистрация обработчика фото
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    # 🎤 Регистрация обработчика голосовых сообщений
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    
+    # Обработчик обычных текстовых сообщений (в конце!)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_error_handler(error_handler)
+    
+    logger.info("Бот запускается...")
+    application.run_polling()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
