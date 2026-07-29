@@ -250,7 +250,7 @@ def get_edit_keyboard():
         [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
+         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -338,11 +338,11 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_action(user_id, "mycards")
     
     if user_id not in card_history or not card_history[user_id]:
-        await send_message_fallback(update, " Карточек пока нет.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "📭 Карточек пока нет.", reply_markup=get_main_keyboard())
         return
     
     cards = card_history[user_id][-5:]
-    msg = f" **Последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
+    msg = f"📋 **Последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
     for i, card in enumerate(reversed(cards), 1):
         preview = card[:100].replace("\n", " ").replace("**", "") + "..."
         msg += f"**{i}.** {preview}\n\n"
@@ -353,7 +353,7 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, "⛔ Только для админа.")
+        await send_message_fallback(update, " Только для админа.")
         return
     await log_action(user_id, "stats")
     
@@ -371,7 +371,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ta, tu, tc, tda, tdc = await asyncio.to_thread(_get_stats)
         text = (f"📊 **Статистика**\n\n"
-                f" Юзеров: {tu}\n"
+                f"👥 Юзеров: {tu}\n"
                 f"📝 Действий: {ta} (сегодня: {tda})\n"
                 f"🎴 Карточек: {tc} (сегодня: {tdc})\n"
                 f"🎤 Голос: {stats['total_voice']} | 🖼️ Фото: {stats['total_photos']}")
@@ -382,7 +382,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, "⛔ Только для админа.")
+        await send_message_fallback(update, " Только для админа.")
         return
     await log_action(user_id, "users")
     
@@ -397,9 +397,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_users)
         if not rows:
-            await send_message_fallback(update, " Пусто.")
+            await send_message_fallback(update, "📭 Пусто.")
             return
-        msg = "👥 **Топ-10 юзеров:**\n\n"
+        msg = " **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
             last = r['l'].strftime('%d.%m %H:%M') if r['l'] else '?'
             msg += f"**{i}.** `{r['user_id']}` — {r['c']} дейст. ({last})\n"
@@ -410,7 +410,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "top")
     
@@ -453,7 +453,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_message_fallback(update, 
         "🖼️ **Фото получил!** Напиши или надиктуй детали:\n"
         "1. Цвет/версия\n2. Для кого\n3. Особенности",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Заполнить", callback_data="fill_photo")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Заполнить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -476,13 +476,16 @@ async def process_user_input(update: Update, user_id: int, text: str):
     stats["total_messages"] += 1
     await log_action(user_id, "message", text[:100])
     
-    # Умная валидация с РАСШИРЕННЫМИ списками
-    if user_id in memory and memory[user_id]:
+    # Проверяем, есть ли история диалога
+    has_history = user_id in memory and len(memory[user_id]) > 0
+    
+    # Если есть история, проверяем валидацию
+    if has_history:
         last_ai = next((m["content"] for m in reversed(memory[user_id]) if m["role"] == "assistant"), "")
         if any(w in last_ai.lower() for w in ["вопрос", "уточнить", "детал"]):
             await show_progress(update, 5, 8)
             
-            # ЦВЕТ/ВЕРСИЯ - расширенный список (ИСПРАВЛЕНО: беспроводн вместо безпроводн)
+            # ЦВЕТ/ВЕРСИЯ
             has_color = any(w in text_lower for w in [
                 "цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", 
                 "серебрист", "золот", "сер", "коричн", "фиолет", "розов", "оранж", "жёлт",
@@ -492,7 +495,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
                 "универс", "унисекс", "мужск", "женск", "детск"
             ])
             
-            # АУДИТОРИЯ - расширенный список
+            # АУДИТОРИЯ
             has_audience = any(w in text_lower for w in [
                 "аудитори", "спортсмен", "дет", "взросл", "професс", 
                 "любитель", "геймер", "музык", "фитнес", "бег", "трениров",
@@ -504,7 +507,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
                 "категори", "любой", "кажд", "предназначен", "подходит", "для"
             ])
             
-            # SEO/ОСОБЕННОСТИ - расширенный список
+            # SEO/ОСОБЕННОСТИ
             has_seo = any(w in text_lower for w in [
                 "seo", "ключ", "водостойк", "мониторинг", "отслеживан", "шаг",
                 "пульс", "сердечн", "ритм", "bluetooth", "wifi", "gps", "наушник",
@@ -525,9 +528,9 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if not has_seo: missing.append("особенности")
             
             if missing:
-                kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
+                kb = [[InlineKeyboardButton(" Пример", callback_data="show_example")]]
                 await send_message_fallback(update, 
-                    f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
+                    f" Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
                     f"💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", 
                     reply_markup=InlineKeyboardMarkup(kb))
                 return
@@ -560,7 +563,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_users": await users_command(update, context); return
     if data == "admin_top": await top_command(update, context); return
     if data == "admin_logs": 
-        await query.edit_message_text("📜 Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text(" Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
         return
     
     if data == "new_card":
@@ -568,7 +571,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "my_cards": await mycards_command(update, context)
     elif data == "edit_last":
         if user_id not in card_history or not card_history[user_id]:
-            await query.edit_message_text(" Сначала создай карточку!", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+            await query.edit_message_text("😕 Сначала создай карточку!", reply_markup=get_main_keyboard(), parse_mode='Markdown')
         else:
             await query.edit_message_text("✏️ Напиши изменения или выбери кнопку:", reply_markup=get_edit_keyboard(), parse_mode='Markdown')
     elif data in ["edit_color", "edit_audience", "edit_seo", "edit_custom"]:
@@ -577,7 +580,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_main":
         await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
-        await query.edit_message_text("️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
+        await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
         await query.edit_message_text("🖼️ Напиши или надиктуй детали для фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
