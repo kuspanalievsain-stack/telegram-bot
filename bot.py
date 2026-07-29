@@ -589,10 +589,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
 
+async def post_init(application):
+    """Инициализация после создания приложения"""
+    logger.info("✅ Инициализация бота...")
+    await application.bot.delete_webhook()
+    logger.info("✅ Webhook удалён")
+
 def main():
     load_memory()
-    application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).build()
     
+    logger.info("🤖 Создаю приложение...")
+    application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).post_init(post_init).build()
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("clear", clear))
     application.add_handler(CommandHandler("newchat", newchat))
@@ -603,15 +611,25 @@ def main():
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("top", top_command))
     application.add_handler(CommandHandler("admin", admin_command))
-    
+
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
+
+    logger.info("🚀 Запускаю polling...")
+    logger.info("🤖 Бот запущен и готов к работе!")
     
-    logger.info("Бот запускается (Оптимизированная версия)...")
-    application.run_polling()
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        timeout=30,
+        drop_pending_updates=True,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30,
+        pool_timeout=30
+    )
 
 if __name__ == '__main__':
     main()
