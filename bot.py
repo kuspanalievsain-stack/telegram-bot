@@ -14,7 +14,7 @@ from datetime import datetime
 # Загрузка переменных окружения
 load_dotenv()
 
-# Настройка логирования
+# Настройка лogирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -353,7 +353,7 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "stats")
     
@@ -382,7 +382,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "users")
     
@@ -399,7 +399,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not rows:
             await send_message_fallback(update, "📭 Пусто.")
             return
-        msg = " **Топ-10 юзеров:**\n\n"
+        msg = "👥 **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
             last = r['l'].strftime('%d.%m %H:%M') if r['l'] else '?'
             msg += f"**{i}.** `{r['user_id']}` — {r['c']} дейст. ({last})\n"
@@ -563,7 +563,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_users": await users_command(update, context); return
     if data == "admin_top": await top_command(update, context); return
     if data == "admin_logs": 
-        await query.edit_message_text(" Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text("📜 Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
         return
     
     if data == "new_card":
@@ -621,14 +621,11 @@ def main():
     logger.info("🚀 Запускаю polling...")
     logger.info("🤖 Бот запущен и готов к работе!")
     
+    # ИСПРАВЛЕНИЕ: Убраны неподдерживаемые параметры timeout
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         timeout=30,
-        drop_pending_updates=True,
-        read_timeout=30,
-        write_timeout=30,
-        connect_timeout=30,
-        pool_timeout=30
+        drop_pending_updates=True
     )
 
 if __name__ == '__main__':
