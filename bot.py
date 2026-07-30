@@ -14,7 +14,7 @@ from datetime import datetime
 # Загрузка переменных окружения
 load_dotenv()
 
-# Настройка лogирования
+# Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -36,13 +36,12 @@ card_history = {}
 # Хранение изображений
 pending_photos = {}
 
-# Счётчики статистики
+# Счётчики статистики (только для текущей сессии, основная статистика берётся из БД)
 stats = {
     "total_messages": 0,
     "total_cards": 0,
     "total_voice": 0,
-    "total_photos": 0,
-    "total_users": set()
+    "total_photos": 0
 }
 
 # ====== АСИНХРОННЫЕ ОПЕРАЦИИ С БД ======
@@ -116,7 +115,7 @@ async def save_card(user_id, card_text):
     stats["total_cards"] += 1
 
 def load_memory():
-    global card_history, stats
+    global card_history
     try:
         conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
         cursor = conn.cursor()
@@ -132,10 +131,6 @@ def load_memory():
             if row['user_id'] not in card_history:
                 card_history[row['user_id']] = []
             card_history[row['user_id']].append(row['card_text'])
-        
-        cursor.execute("SELECT COUNT(DISTINCT user_id) as total FROM user_actions")
-        row = cursor.fetchone()
-        if row: stats["total_users"] = {row['total']}
         
         cursor.close()
         conn.close()
@@ -250,7 +245,7 @@ def get_edit_keyboard():
         [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
+         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -267,7 +262,6 @@ def get_admin_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    stats["total_users"].add(user_id)
     await log_action(user_id, "start")
     await send_message_fallback(update, 
         "👋 **Привет! Я AI-бот для карточек товаров.**\n\n"
@@ -301,7 +295,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = "🤖 **AI-бот для карточек**\n\n"
     text += "/start, /help, /newchat, /clear, /edit, /mycards\n\n"
     if is_admin(user_id):
-        text += " **Админ:** /stats, /users, /top, /admin\n\n"
+        text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
     text += "💡 Напиши товар, ответь на 3 вопроса, получи карточку!"
     await send_message_fallback(update, text)
 
@@ -528,9 +522,9 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if not has_seo: missing.append("особенности")
             
             if missing:
-                kb = [[InlineKeyboardButton(" Пример", callback_data="show_example")]]
+                kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
                 await send_message_fallback(update, 
-                    f" Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
+                    f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
                     f"💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", 
                     reply_markup=InlineKeyboardMarkup(kb))
                 return
@@ -621,7 +615,6 @@ def main():
     logger.info("🚀 Запускаю polling...")
     logger.info("🤖 Бот запущен и готов к работе!")
     
-    # ИСПРАВЛЕНИЕ: Убраны неподдерживаемые параметры timeout
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         timeout=30,
