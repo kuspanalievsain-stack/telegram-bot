@@ -129,7 +129,7 @@ async def show_progress(update: Update, step: int, total_steps: int):
     progress_messages = {
         1: "⏳ **Анализирую запрос...**\n_Понимаю, что нужно описать_",
         2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
-        3: "️ **Задаю вопросы...**\n_Нужно уточнить детали_",
+        3: "✍️ **Задаю вопросы...**\n_Нужно уточнить детали_",
         4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
         5: "🔍 **Проверяю ответы...**\n_Анализирую информацию_",
         6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
@@ -169,10 +169,48 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
     if len(memory[user_id]) > 10:
         memory[user_id] = memory[user_id][-10:]
     
+    # УЛУЧШЕННЫЙ ПРОМПТ — строгий, без мусора
     system_prompt = """Ты — профессиональный копирайтер для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
-ПРАВИЛА: 1. Сначала задай 3 вопроса (цвет/версия, аудитория, SEO). 2. Жди ответов. 3. Создавай карточку.
-ФОРМАТ: **Название:** ...\n**Описание:** ...\n**Характеристики:**\n- **Параметр:** значение\n**Функции:**\n- **Функция:** описание\n**Для кого:** ...\n**SEO-ключи:** ...
-СТИЛЬ: Русский язык, продающие формулировки, конкретика, умеренные эмодзи."""
+
+🚫 СТРОГИЕ ПРАВИЛА (НЕ НАРУШАЙ):
+1. НИКОГДА не пиши вступлений типа "Я вижу...", "На основе...", "Вот карточка...", "Я готов создать..."
+2. НИКОГДА не пиши завершений типа "Надеюсь...", "Если нужно изменить...", "Просто дайте знать...", "Обратитесь ко мне..."
+3. НИКОГДА не добавляй комментарии от себя — только текст карточки
+4. Верни ТОЛЬКО текст карточки — без лишних слов до и после
+
+✅ ПРАВИЛА РАБОТЫ:
+1. Сначала задай 3 вопроса (цвет/версия, аудитория, SEO). Жди ответов.
+2. Только после получения всех ответов создавай карточку.
+
+ ФОРМАТ КАРТОЧКИ (строго придерживайся):
+
+**Название:** [Краткое, цепляющее название с ключевыми словами]
+
+**Описание:** [2-3 предложения о товаре, его преимуществах и пользе для покупателя]
+
+**Характеристики:**
+- **Параметр 1:** значение
+- **Параметр 2:** значение
+- **Параметр 3:** значение
+- **Параметр 4:** значение
+- **Параметр 5:** значение
+
+**Функции и преимущества:**
+- **Функция 1:** краткое описание
+- **Функция 2:** краткое описание
+- **Функция 3:** краткое описание
+
+**Для кого подходит:** [описание целевой аудитории]
+
+**SEO-ключи:** [список ключевых слов через запятую]
+
+✍️ СТИЛЬ:
+- Русский язык
+- Продающие формулировки
+- Конкретика (цифры, факты)
+- Без воды и общих фраз
+- Умеренные эмодзи (1-2 на раздел, только по смыслу)
+- Без восклицательных знаков в конце каждого предложения"""
     
     try:
         def _call_groq():
@@ -218,7 +256,7 @@ def get_main_keyboard():
          InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")],
         [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
          InlineKeyboardButton("🖼️ Загрузить фото", callback_data="upload_photo")],
-        [InlineKeyboardButton(" Помощь", callback_data="help")]
+        [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ])
 
 def get_edit_keyboard():
@@ -254,8 +292,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 **Привет! Я AI-бот для карточек товаров.**\n\n"
         "Я помогу создать карточку для WB/Ozon за пару минут!\n\n"
         "🎯 **Ты можешь:**\n"
-        "• ✍️ Написать текст\n"
-        "• 🖼️ Отправить фото\n"
+        "• ️ Написать текст\n"
+        "• ️ Отправить фото\n"
         "• 🎤 Отправить голосовое\n\n"
         "👇 **Выбери действие:**",
         reply_markup=get_main_keyboard())
@@ -279,7 +317,7 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "help")
-    text = "🤖 **AI-бот для карточек**\n\n"
+    text = " **AI-бот для карточек**\n\n"
     text += "/start, /help, /newchat, /clear, /edit, /mycards\n\n"
     if is_admin(user_id):
         text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
@@ -312,7 +350,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_action(user_id, "edit_card", edit_text)
         await send_message_fallback(update, "✅ **Обновлено!**\n\n" + edited, reply_markup=get_card_keyboard())
     except Exception as e:
-        await send_message_fallback(update, f" Ошибка: {str(e)}")
+        await send_message_fallback(update, f"❌ Ошибка: {str(e)}")
 
 async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -328,7 +366,7 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         preview = card[:100].replace("\n", " ").replace("**", "") + "..."
         msg += f"**{i}.** {preview}\n\n"
     
-    msg += "\n Чтобы скачать карточку, создай новую или используй кнопку 'Скачать TXT' под последней карточкой."
+    msg += "\n💡 Чтобы скачать карточку, создай новую или используй кнопку 'Скачать TXT' под последней карточкой."
     await send_message_fallback(update, msg, reply_markup=get_main_keyboard())
 
 async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -356,7 +394,7 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(
             document=InputFile(file_io),
             filename=filename,
-            caption="📥 **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
+            caption=" **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
         )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -445,7 +483,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await send_message_fallback(update, "⛔ Только для админа.")
+        await send_message_fallback(update, " Только для админа.")
         return
     await send_message_fallback(update, "🔐 **Админ-панель**\nВыбери раздел:", reply_markup=get_admin_keyboard())
 
@@ -532,7 +570,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if missing:
                 kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
                 await send_message_fallback(update, 
-                    f" Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
+                    f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
                     f"💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", 
                     reply_markup=InlineKeyboardMarkup(kb))
                 return
@@ -584,7 +622,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id not in card_history or not card_history[user_id]:
             await query.edit_message_text("😕 Сначала создай карточку!", reply_markup=get_main_keyboard(), parse_mode='Markdown')
         else:
-            await query.edit_message_text("️ Напиши изменения или выбери кнопку:", reply_markup=get_edit_keyboard(), parse_mode='Markdown')
+            await query.edit_message_text("✏️ Напиши изменения или выбери кнопку:", reply_markup=get_edit_keyboard(), parse_mode='Markdown')
     elif data in ["edit_color", "edit_audience", "edit_seo", "edit_custom"]:
         await query.edit_message_text("✏️ Напиши или надиктуй, что изменить:", parse_mode='Markdown')
     elif data == "help":
@@ -592,7 +630,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_main":
         await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
-        await query.edit_message_text("️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
+        await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
         await query.edit_message_text("🖼️ Напиши или надиктуй детали для фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
@@ -629,8 +667,8 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
 
-    logger.info(" Запускаю polling...")
-    logger.info("🤖 Бот запущен и готов к работе!")
+    logger.info("🚀 Запускаю polling...")
+    logger.info(" Бот запущен и готов к работе!")
     
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
