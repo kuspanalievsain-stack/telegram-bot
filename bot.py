@@ -184,7 +184,7 @@ async def show_progress(update: Update, step: int, total_steps: int):
         2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
         3: "✍️ **Задаю вопросы...**\n_Нужно уточнить детали_",
         4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
-        5: " **Проверяю ответы...**\n_Анализирую информацию_",
+        5: "🔍 **Проверяю ответы...**\n_Анализирую информацию_",
         6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
         7: "✍️ **Создаю карточку...**\n_Пишу продающее описание_",
         8: "✅ **Карточка готова!**\n_Сохраняю и отправляю_"
@@ -306,7 +306,7 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
             
         except Exception as e:
             logger.error(f"Неожиданная ошибка AI: {e}")
-            return f" **Неожиданная ошибка:** {str(e)[:100]}\n\nПопробуй позже или напиши `/newchat`."
+            return f"❌ **Неожиданная ошибка:** {str(e)[:100]}\n\nПопробуй позже или напиши `/newchat`."
     
     return "❌ **Не удалось получить ответ от AI.** Попробуй позже."
 
@@ -345,7 +345,7 @@ def get_edit_keyboard():
         [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
+         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -375,8 +375,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 **Привет! Я AI-бот для карточек товаров.**\n\n"
         "Я помогу создать карточку для WB/Ozon за пару минут!\n\n"
         "🎯 **Ты можешь:**\n"
-        "• ️ Написать текст\n"
-        "• ️ Отправить фото\n"
+        "• ✍️ Написать текст\n"
+        "• 🖼️ Отправить фото\n"
         "• 🎤 Отправить голосовое\n\n"
         "👇 **Выбери действие:**",
         reply_markup=get_main_keyboard())
@@ -400,7 +400,7 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "help")
-    text = " **AI-бот для карточек**\n\n"
+    text = "🤖 **AI-бот для карточек**\n\n"
     text += "/start, /help, /newchat, /clear, /edit, /mycards\n\n"
     if is_admin(user_id):
         text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
@@ -477,7 +477,7 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(
             document=InputFile(file_io),
             filename=filename,
-            caption=" **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
+            caption="📥 **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
         )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -527,7 +527,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_users)
         if not rows:
-            await send_message_fallback(update, " Пусто.")
+            await send_message_fallback(update, "📭 Пусто.")
             return
         msg = "👥 **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
@@ -540,7 +540,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "top")
     
@@ -555,7 +555,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_top)
         if not rows:
-            await send_message_fallback(update, " Топ пуст.")
+            await send_message_fallback(update, "📭 Топ пуст.")
             return
         msg = "🔥 **Топ товаров:**\n\n"
         for i, r in enumerate(rows, 1):
@@ -583,7 +583,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_message_fallback(update, 
         "🖼️ **Фото получил!** Напиши или надиктуй детали:\n"
         "1. Цвет/версия\n2. Для кого\n3. Особенности",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Заполнить", callback_data="fill_photo")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Заполнить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -595,16 +595,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = await transcribe_voice(voice)
     
     if not text:
-        await status.edit_text(" Не понял голос. Попробуй еще раз или напиши текстом.")
+        await status.edit_text("❌ Не понял голос. Попробуй еще раз или напиши текстом.")
         return
     
     await status.edit_text(f"✅ **Распознал:**\n\"{text}\"\n_Обрабатываю..._", parse_mode='Markdown')
     await process_user_input(update, user_id, text)
 
-# ====== НОВОЕ: Обработчик стикеров (отдельно, до текста!) ======
+# ====== НОВОЕ: Обработчики для неподдерживаемых типов ======
 
 async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик стикеров"""
     user_id = update.effective_user.id
     await log_action(user_id, "sticker")
     await send_message_fallback(update, 
@@ -615,38 +614,29 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик видео ======
-
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик видео"""
     user_id = update.effective_user.id
     await log_action(user_id, "video")
     await send_message_fallback(update, 
         "🎬 **Видео я пока не обрабатываю.**\n\n"
         "Я работаю с:\n"
         "• ✍️ Текстом\n"
-        "•  Голосовыми сообщениями\n"
+        "• 🎤 Голосовыми сообщениями\n"
         "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик документов ======
-
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик документов"""
     user_id = update.effective_user.id
     await log_action(user_id, "document")
     await send_message_fallback(update, 
-        " **Документы я не обрабатываю.**\n\n"
+        "📄 **Документы я не обрабатываю.**\n\n"
         "Я работаю с:\n"
         "• ✍️ Текстом\n"
         "• 🎤 Голосовыми сообщениями\n"
         "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик геолокаций ======
-
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик геолокаций"""
     user_id = update.effective_user.id
     await log_action(user_id, "location")
     await send_message_fallback(update, 
@@ -654,13 +644,10 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я работаю с:\n"
         "• ✍️ Текстом\n"
         "• 🎤 Голосовыми сообщениями\n"
-        "• ️ Фотографиями товаров",
+        "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик контактов ======
-
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик контактов"""
     user_id = update.effective_user.id
     await log_action(user_id, "contact")
     await send_message_fallback(update, 
@@ -668,35 +655,26 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Я работаю с:\n"
         "• ✍️ Текстом\n"
         "• 🎤 Голосовыми сообщениями\n"
-        "• ️ Фотографиями товаров",
+        "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик аудио ======
-
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик аудиофайлов"""
     user_id = update.effective_user.id
     await log_action(user_id, "audio")
     await send_message_fallback(update, 
-        " **Аудиофайлы я не обрабатываю.**\n\n"
+        "🎵 **Аудиофайлы я не обрабатываю.**\n\n"
         "Используй голосовые сообщения 🎤 или напиши текст ✍️",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик видео-кружочков ======
-
 async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик видео-кружочков"""
     user_id = update.effective_user.id
     await log_action(user_id, "video_note")
     await send_message_fallback(update, 
-        " **Видео-кружочки я не обрабатываю.**\n\n"
+        "📹 **Видео-кружочки я не обрабатываю.**\n\n"
         "Используй голосовые сообщения 🎤 или напиши текст ✍️",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик анимаций (GIF) ======
-
 async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик GIF-анимаций"""
     user_id = update.effective_user.id
     await log_action(user_id, "animation")
     await send_message_fallback(update, 
@@ -707,30 +685,25 @@ async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
-# ====== НОВОЕ: Обработчик опросов ======
-
 async def handle_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик опросов"""
     user_id = update.effective_user.id
     await log_action(user_id, "poll")
     await send_message_fallback(update, 
         "📊 **Опросы я не поддерживаю.**\n\n"
         "Я работаю с:\n"
         "• ✍️ Текстом\n"
-        "•  Голосовыми сообщениями\n"
+        "• 🎤 Голосовыми сообщениями\n"
         "• 🖼️ Фотографиями товаров",
         reply_markup=get_main_keyboard())
 
 async def process_user_input(update: Update, user_id: int, text: str):
-    # Проверка пустого сообщения
     if is_empty_message(text):
         await send_message_fallback(update, 
             "🤔 **Сообщение пустое.**\n\n"
-            "Напиши текст или отправь голосовое  / фото 🖼️.",
+            "Напиши текст или отправь голосовое 🎤 / фото 🖼️.",
             reply_markup=get_main_keyboard())
         return
     
-    # Rate limiting
     allowed, message = check_rate_limit(user_id)
     if not allowed:
         await send_message_fallback(update, message)
@@ -832,7 +805,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await top_command(update, context)
         return
     if data == "admin_logs":
-        await query.edit_message_text(" Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text("📜 Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
         return
     
     if data == "export_last_card":
@@ -882,7 +855,7 @@ async def post_init(application):
 def main():
     load_memory()
     
-    logger.info(" Создаю приложение...")
+    logger.info("🤖 Создаю приложение...")
     application = Application.builder().token(os.getenv("TELEGRAM_TOKEN")).post_init(post_init).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -903,7 +876,7 @@ def main():
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video))
-    application.add_handler(MessageHandler(filters.DOCUMENT, handle_document))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document)) # ИСПРАВЛЕНО
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
@@ -915,7 +888,7 @@ def main():
     application.add_error_handler(error_handler)
 
     logger.info("🚀 Запускаю polling...")
-    logger.info(" Бот запущен и готов к работе!")
+    logger.info("🤖 Бот запущен и готов к работе!")
     
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
