@@ -101,4 +101,4 @@ def _save_card_sync(user_id, card_text):
         cursor.close()
         conn.close()
         
-        if user_id
+        if user_id:
