@@ -2,3 +2,4 @@ python-telegram-bot
 groq
 psycopg[binary]
 python-dotenv
+requests
