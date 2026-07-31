@@ -4,6 +4,8 @@ import logging
 import asyncio
 import time
 import re
+import urllib.parse
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from groq import Groq, RateLimitError, APIError
@@ -33,6 +35,49 @@ stats = {
     "total_cards": 0,
     "total_voice": 0,
     "total_photos": 0
+}
+
+# ====== Система режимов ======
+user_modes = {}  # Хранит режим для каждого пользователя: user_id -> "mode_name"
+
+MODE_PROMPTS = {
+    "marketplace": """Ты — профессиональный копирайтер для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
+ СТРОГИЕ ПРАВИЛА (НЕ НАРУШАЙ):
+1. НИКОГДА не пиши вступлений типа "Я вижу...", "На основе...", "Вот карточка..."
+2. НИКОГДА не пиши завершений типа "Надеюсь...", "Если нужно изменить..."
+3. Верни ТОЛЬКО текст карточки — без лишних слов до и после
+✅ ПРАВИЛА РАБОТЫ:
+1. Сначала задай 3 вопроса (цвет/версия, аудитория, SEO). Жди ответов.
+2. Только после получения всех ответов создавай карточку.
+📋 ФОРМАТ КАРТОЧКИ (строго придерживайся):
+**Название:** [Краткое, цепляющее название с ключевыми словами]
+**Описание:** [2-3 предложения о товаре, его преимуществах и пользе для покупателя]
+**Характеристики:** (5 пунктов)
+**Функции и преимущества:** (3 пункта)
+**Для кого подходит:** [описание целевой аудитории]
+**SEO-ключи:** [список ключевых слов через запятую]
+✍️ СТИЛЬ: Русский язык, продающие формулировки, конкретика, без воды, умеренные эмодзи.""",
+
+    "finance": """Ты — опытный финансовый аналитик и инвестиционный советник.
+Твоя задача: давать четкие, структурированные и полезные ответы о финансах, инвестициях, криптовалютах и экономике.
+Правила:
+1. Всегда добавляй дисклеймер: "⚠️ Это не индивидуальная инвестиционная рекомендация".
+2. Используй факты, цифры и структурированный формат (списки, жирный шрифт).
+3. Отвечай на русском языке, профессионально, но доступно.""",
+
+    "cooking": """Ты — шеф-повар мирового уровня и кулинарный эксперт.
+Твоя задача: создавать вкусные, подробные и понятные рецепты, давать советы по приготовлению.
+Правила:
+1. Всегда указывай ингредиенты с точными граммовками.
+2. Описывай пошаговый процесс приготовления.
+3. Давай профессиональные советы (чем заменить ингредиент, как красиво подать).""",
+
+    "universal": """Ты — универсальный, эрудированный и полезный AI-помощник.
+Твоя задача: отвечать на любые вопросы пользователя (политика, спорт, культура, медицина, техника и т.д.) максимально точно, объективно и структурированно.
+Правила:
+1. Если вопрос касается медицины или права, добавляй дисклеймер о необходимости консультации со специалистом.
+2. Используй структурированный формат (заголовки, списки).
+3. Отвечай на русском языке."""
 }
 
 # ====== Rate limiting ======
@@ -142,14 +187,13 @@ def load_memory():
 # ====== Rate limiting ======
 
 def check_rate_limit(user_id: int) -> tuple:
-    """Проверяет rate limit. Возвращает (allowed: bool, message: str)"""
     now = time.time()
     
     if user_id in user_last_request:
         time_since_last = now - user_last_request[user_id]
         if time_since_last < RATE_LIMIT_SECONDS:
             wait_time = max(1, int(RATE_LIMIT_SECONDS - time_since_last) + 1)
-            return False, f"⏳ Пожалуйста, подожди {wait_time} сек. перед следующим запросом."
+            return False, f" Пожалуйста, подожди {wait_time} сек. перед следующим запросом."
     
     if user_id not in user_request_count:
         user_request_count[user_id] = []
@@ -157,7 +201,7 @@ def check_rate_limit(user_id: int) -> tuple:
     user_request_count[user_id] = [t for t in user_request_count[user_id] if now - t < 60]
     
     if len(user_request_count[user_id]) >= MAX_REQUESTS_PER_MINUTE:
-        return False, "⚠️ Слишком много запросов. Подожди минуту и попробуй снова."
+        return False, "️ Слишком много запросов. Подожди минуту и попробуй снова."
     
     user_last_request[user_id] = now
     user_request_count[user_id].append(now)
@@ -166,13 +210,9 @@ def check_rate_limit(user_id: int) -> tuple:
 # ====== Проверка пустых сообщений ======
 
 def is_empty_message(text: str) -> bool:
-    """Проверяет, является ли сообщение пустым (только пробелы/эмодзи/символы)"""
     if not text:
         return True
-    
-    # Убираем пробелы, эмодзи и специальные символы Unicode
     cleaned = re.sub(r'[\s\U00010000-\U0010ffff\u200d\u20e3\ufe0f\u2600-\u27bf]', '', text)
-    # Убираем также пунктуацию и цифры
     cleaned = re.sub(r'[^\wа-яА-ЯёЁa-zA-Z]', '', cleaned)
     return len(cleaned) == 0
 
@@ -222,47 +262,9 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
     if len(memory[user_id]) > 10:
         memory[user_id] = memory[user_id][-10:]
     
-    system_prompt = """Ты — профессиональный копирайтер для маркетплейсов (Wildberries, Ozon, Яндекс.Маркет).
-
-🚫 СТРОГИЕ ПРАВИЛА (НЕ НАРУШАЙ):
-1. НИКОГДА не пиши вступлений типа "Я вижу...", "На основе...", "Вот карточка...", "Я готов создать..."
-2. НИКОГДА не пиши завершений типа "Надеюсь...", "Если нужно изменить...", "Просто дайте знать...", "Обратитесь ко мне..."
-3. НИКОГДА не добавляй комментарии от себя — только текст карточки
-4. Верни ТОЛЬКО текст карточки — без лишних слов до и после
-
-✅ ПРАВИЛА РАБОТЫ:
-1. Сначала задай 3 вопроса (цвет/версия, аудитория, SEO). Жди ответов.
-2. Только после получения всех ответов создавай карточку.
-
-📋 ФОРМАТ КАРТОЧКИ (строго придерживайся):
-
-**Название:** [Краткое, цепляющее название с ключевыми словами]
-
-**Описание:** [2-3 предложения о товаре, его преимуществах и пользе для покупателя]
-
-**Характеристики:**
-- **Параметр 1:** значение
-- **Параметр 2:** значение
-- **Параметр 3:** значение
-- **Параметр 4:** значение
-- **Параметр 5:** значение
-
-**Функции и преимущества:**
-- **Функция 1:** краткое описание
-- **Функция 2:** краткое описание
-- **Функция 3:** краткое описание
-
-**Для кого подходит:** [описание целевой аудитории]
-
-**SEO-ключи:** [список ключевых слов через запятую]
-
-✍️ СТИЛЬ:
-- Русский язык
-- Продающие формулировки
-- Конкретика (цифры, факты)
-- Без воды и общих фраз
-- Умеренные эмодзи (1-2 на раздел, только по смыслу)
-- Без восклицательных знаков в конце каждого предложения"""
+    # === НОВОЕ: Динамический выбор промпта в зависимости от режима ===
+    current_mode = user_modes.get(user_id, "marketplace")
+    system_prompt = MODE_PROMPTS.get(current_mode, MODE_PROMPTS["universal"])
     
     max_retries = 3
     for attempt in range(max_retries):
@@ -306,9 +308,28 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
             
         except Exception as e:
             logger.error(f"Неожиданная ошибка AI: {e}")
-            return f"❌ **Неожиданная ошибка:** {str(e)[:100]}\n\nПопробуй позже или напиши `/newchat`."
+            return f" **Неожиданная ошибка:** {str(e)[:100]}\n\nПопробуй позже или напиши `/newchat`."
     
     return "❌ **Не удалось получить ответ от AI.** Попробуй позже."
+
+# ====== Генерация изображений ======
+
+async def generate_image(prompt: str):
+    """Генерирует изображение через бесплатный API Pollinations.ai"""
+    try:
+        safe_prompt = urllib.parse.quote(prompt[:150].replace("\n", " "))
+        url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=1024&nologo=true&seed={int(time.time())}"
+        
+        def _download():
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            return response.content
+        
+        image_bytes = await asyncio.to_thread(_download)
+        return BytesIO(image_bytes)
+    except Exception as e:
+        logger.error(f"Ошибка генерации изображения: {e}")
+        return None
 
 async def send_message_fallback(update: Update, text: str, reply_markup=None):
     try:
@@ -333,16 +354,15 @@ def is_admin(user_id: int) -> bool:
 
 def get_main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Новая карточка", callback_data="new_card"),
-         InlineKeyboardButton("📋 Мои карточки", callback_data="my_cards")],
-        [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last"),
-         InlineKeyboardButton("🖼️ Загрузить фото", callback_data="upload_photo")],
+        [InlineKeyboardButton("➕ Новый запрос", callback_data="new_card"),
+         InlineKeyboardButton(" История", callback_data="my_cards")],
+        [InlineKeyboardButton("🔄 Сменить режим", callback_data="show_modes")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ])
 
 def get_edit_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
+        [InlineKeyboardButton(" Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
          InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
@@ -360,9 +380,9 @@ def get_admin_keyboard():
 
 def get_card_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Новая", callback_data="new_card"),
+        [InlineKeyboardButton("🖼️ Сгенерировать фото", callback_data="generate_image")],
+        [InlineKeyboardButton("➕ Новый", callback_data="new_card"),
          InlineKeyboardButton("📋 Мои", callback_data="my_cards")],
-        [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_last")],
         [InlineKeyboardButton("📥 Скачать TXT", callback_data="export_last_card")]
     ])
 
@@ -372,13 +392,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "start")
     await send_message_fallback(update, 
-        "👋 **Привет! Я AI-бот для карточек товаров.**\n\n"
-        "Я помогу создать карточку для WB/Ozon за пару минут!\n\n"
-        "🎯 **Ты можешь:**\n"
-        "• ✍️ Написать текст\n"
-        "• 🖼️ Отправить фото\n"
-        "• 🎤 Отправить голосовое\n\n"
-        "👇 **Выбери действие:**",
+        "👋 **Привет! Я твой универсальный AI-помощник.**\n\n"
+        "🎯 **Что я умею:**\n"
+        "• 📦 Создавать карточки для маркетплейсов\n"
+        "• 💰 Давать советы по финансам и крипто\n"
+        "• 🍳 Придумывать рецепты\n"
+        "• 🌐 Отвечать на любые вопросы\n"
+        "• 🖼️ Генерировать изображения\n\n"
+        "👇 **Нажми 'Сменить режим', чтобы выбрать тему!**",
         reply_markup=get_main_keyboard())
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -395,16 +416,16 @@ async def newchat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del memory[user_id]
         await save_memory(memory)
     await log_action(user_id, "newchat")
-    await send_message_fallback(update, "🔄 **Новый диалог!**\nНапиши, какой товар описать:", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🔄 **Новый диалог!**\nНапиши свой запрос:", reply_markup=get_main_keyboard())
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "help")
-    text = "🤖 **AI-бот для карточек**\n\n"
+    text = "🤖 **Универсальный AI-помощник**\n\n"
     text += "/start, /help, /newchat, /clear, /edit, /mycards\n\n"
     if is_admin(user_id):
         text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
-    text += "💡 Напиши товар, ответь на 3 вопроса, получи карточку!"
+    text += "💡 Используй кнопку '🔄 Сменить режим' для выбора темы!"
     await send_message_fallback(update, text)
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -440,28 +461,28 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_action(user_id, "mycards")
     
     if user_id not in card_history or not card_history[user_id]:
-        await send_message_fallback(update, "📭 Карточек пока нет.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "📭 Запросов пока нет.", reply_markup=get_main_keyboard())
         return
     
     cards = card_history[user_id][-5:]
-    msg = f"📋 **Последние карточки** ({len(cards)} из {len(card_history[user_id])}):\n\n"
+    msg = f" **Последние ответы** ({len(cards)} из {len(card_history[user_id])}):\n\n"
     for i, card in enumerate(reversed(cards), 1):
         preview = card[:100].replace("\n", " ").replace("**", "") + "..."
         msg += f"**{i}.** {preview}\n\n"
     
-    msg += "\n💡 Чтобы скачать карточку, создай новую или используй кнопку 'Скачать TXT' под последней карточкой."
+    msg += "\n Чтобы скачать ответ, используй кнопку 'Скачать TXT'."
     await send_message_fallback(update, msg, reply_markup=get_main_keyboard())
 
 async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if user_id not in card_history or not card_history[user_id]:
-        await send_message_fallback(update, "📭 У тебя нет созданных карточек.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "📭 У тебя нет сохраненных ответов.", reply_markup=get_main_keyboard())
         return
     
     last_card = card_history[user_id][-1]
     
-    filename = f"card_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    filename = f"response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     file_content = last_card.replace("**", "").replace("##", "")
     
     file_io = BytesIO(file_content.encode('utf-8'))
@@ -471,13 +492,13 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_document(
             document=InputFile(file_io),
             filename=filename,
-            caption="📥 **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
+            caption="📥 **Текст экспортирован!**"
         )
     else:
         await update.message.reply_document(
             document=InputFile(file_io),
             filename=filename,
-            caption="📥 **Карточка экспортирована!**\n\nТеперь ты можешь скопировать текст из файла."
+            caption="📥 **Текст экспортирован!**"
         )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -501,9 +522,9 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ta, tu, tc, tda, tdc = await asyncio.to_thread(_get_stats)
         text = (f"📊 **Статистика**\n\n"
-                f"👥 Юзеров: {tu}\n"
+                f" Юзеров: {tu}\n"
                 f"📝 Действий: {ta} (сегодня: {tda})\n"
-                f"🎴 Карточек: {tc} (сегодня: {tdc})\n"
+                f"🎴 Ответов: {tc} (сегодня: {tdc})\n"
                 f"🎤 Голос: {stats['total_voice']} | 🖼️ Фото: {stats['total_photos']}")
         await send_message_fallback(update, text, reply_markup=get_admin_keyboard())
     except Exception as e:
@@ -527,7 +548,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_users)
         if not rows:
-            await send_message_fallback(update, "📭 Пусто.")
+            await send_message_fallback(update, " Пусто.")
             return
         msg = "👥 **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
@@ -555,9 +576,9 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_top)
         if not rows:
-            await send_message_fallback(update, "📭 Топ пуст.")
+            await send_message_fallback(update, " Топ пуст.")
             return
-        msg = "🔥 **Топ товаров:**\n\n"
+        msg = "🔥 **Топ запросов:**\n\n"
         for i, r in enumerate(rows, 1):
             msg += f"**{i}.** {r['details'][:50]}... ({r['c']} шт.)\n"
         await send_message_fallback(update, msg, reply_markup=get_admin_keyboard())
@@ -581,9 +602,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_photos[user_id] = await photo.download_as_bytearray()
     
     await send_message_fallback(update, 
-        "🖼️ **Фото получил!** Напиши или надиктуй детали:\n"
-        "1. Цвет/версия\n2. Для кого\n3. Особенности",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Заполнить", callback_data="fill_photo")]]))
+        "🖼️ **Фото получил!** Напиши или надиктуй, что нужно сделать с этим изображением.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Продолжить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -601,107 +621,54 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status.edit_text(f"✅ **Распознал:**\n\"{text}\"\n_Обрабатываю..._", parse_mode='Markdown')
     await process_user_input(update, user_id, text)
 
-# ====== НОВОЕ: Обработчики для неподдерживаемых типов ======
-
 async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "sticker")
-    await send_message_fallback(update, 
-        "🎨 **Стикеры я не понимаю.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🎨 **Стикеры я не понимаю.**\n\nЯ работаю с текстом, голосом и фото.", reply_markup=get_main_keyboard())
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video")
-    await send_message_fallback(update, 
-        "🎬 **Видео я пока не обрабатываю.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, " **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "document")
-    await send_message_fallback(update, 
-        "📄 **Документы я не обрабатываю.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📄 **Документы я не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "location")
-    await send_message_fallback(update, 
-        "📍 **Геолокация мне не нужна.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📍 **Геолокация мне не нужна.**", reply_markup=get_main_keyboard())
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "contact")
-    await send_message_fallback(update, 
-        "📞 **Контакты сохранять не нужно.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📞 **Контакты сохранять не нужно.**", reply_markup=get_main_keyboard())
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "audio")
-    await send_message_fallback(update, 
-        "🎵 **Аудиофайлы я не обрабатываю.**\n\n"
-        "Используй голосовые сообщения 🎤 или напиши текст ✍️",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🎵 **Аудиофайлы я не обрабатываю.** Используй голосовые 🎤", reply_markup=get_main_keyboard())
 
 async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video_note")
-    await send_message_fallback(update, 
-        "📹 **Видео-кружочки я не обрабатываю.**\n\n"
-        "Используй голосовые сообщения 🎤 или напиши текст ✍️",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📹 **Видео-кружочки я не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "animation")
-    await send_message_fallback(update, 
-        "🎭 **GIF-анимации я не понимаю.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🎭 **GIF-анимации я не понимаю.**", reply_markup=get_main_keyboard())
 
 async def handle_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "poll")
-    await send_message_fallback(update, 
-        "📊 **Опросы я не поддерживаю.**\n\n"
-        "Я работаю с:\n"
-        "• ✍️ Текстом\n"
-        "• 🎤 Голосовыми сообщениями\n"
-        "• 🖼️ Фотографиями товаров",
-        reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📊 **Опросы я не поддерживаю.**", reply_markup=get_main_keyboard())
 
 async def process_user_input(update: Update, user_id: int, text: str):
     if is_empty_message(text):
-        await send_message_fallback(update, 
-            "🤔 **Сообщение пустое.**\n\n"
-            "Напиши текст или отправь голосовое 🎤 / фото 🖼️.",
-            reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое  / фото 🖼️.", reply_markup=get_main_keyboard())
         return
     
     allowed, message = check_rate_limit(user_id)
@@ -715,56 +682,26 @@ async def process_user_input(update: Update, user_id: int, text: str):
     
     has_history = user_id in memory and len(memory[user_id]) > 0
     
-    if has_history:
+    # Логика уточняющих вопросов только для режима маркетплейса
+    current_mode = user_modes.get(user_id, "marketplace")
+    
+    if has_history and current_mode == "marketplace":
         last_ai = next((m["content"] for m in reversed(memory[user_id]) if m["role"] == "assistant"), "")
         if any(w in last_ai.lower() for w in ["вопрос", "уточнить", "детал"]):
             await show_progress(update, 5, 8)
             
-            has_color = any(w in text_lower for w in [
-                "цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", 
-                "серебрист", "золот", "сер", "коричн", "фиолет", "розов", "оранж", "жёлт",
-                "премиум", "базов", "стандарт", "размер", "s", "m", "l", "xl",
-                "накладн", "вкладыш", "проводн", "беспроводн", "микрофон",
-                "металл", "пластик", "силикон", "кож", "стекл", "матов", "глянц",
-                "универс", "унисекс", "мужск", "женск", "детск"
-            ])
-            
-            has_audience = any(w in text_lower for w in [
-                "аудитори", "спортсмен", "дет", "взросл", "професс", 
-                "любитель", "геймер", "музык", "фитнес", "бег", "трениров",
-                "офис", "работ", "дом", "улица", "18+", "16+", "подрост",
-                "мужчин", "женщин", "универсал", "все", "кажд", "пользовател",
-                "клиент", "покупател", "люди", "человек", "парень", "девушк",
-                "мальчик", "девочк", "студент", "школьник", "пенсионер",
-                "мам", "пап", "ребён", "семь", "активн", "начинающ", "опытн",
-                "категори", "любой", "кажд", "предназначен", "подходит", "для"
-            ])
-            
-            has_seo = any(w in text_lower for w in [
-                "seo", "ключ", "водостойк", "мониторинг", "отслеживан", "шаг",
-                "пульс", "сердечн", "ритм", "bluetooth", "wifi", "gps", "наушник",
-                "звук", "бас", "шум", "автоном", "батаре", "заряд", "время",
-                "работа", "поддержк", "совместим", "android", "ios", "iphone",
-                "качество", "hi", "hd", "стерео", "мощн", "громк", "тих",
-                "функци", "возможност", "особенност", "характеристик", "параметр",
-                "давлен", "калори", "сон", "активн", "тренировк", "упражнен",
-                "бего", "плаван", "велосипед", "ходьб", "прыжк", "йога",
-                "лёгк", "тяжёл", "компакт", "удобн", "прочн", "надёжн",
-                "быстр", "медлен", "точн", "умн", "интеллек", "автомат",
-                "подавлен", "связ", "подключен", "передач", "воспроизведен"
-            ])
+            has_color = any(w in text_lower for w in ["цвет", "версия", "бел", "чёрн", "черн", "син", "красн", "зелён", "серебрист", "золот", "сер", "коричн", "фиолет", "розов", "оранж", "жёлт", "премиум", "базов", "стандарт", "размер", "s", "m", "l", "xl", "накладн", "вкладыш", "проводн", "беспроводн", "микрофон", "металл", "пластик", "силикон", "кож", "стекл", "матов", "глянц", "универс", "унисекс", "мужск", "женск", "детск"])
+            has_audience = any(w in text_lower for w in ["аудитори", "спортсмен", "дет", "взросл", "професс", "любитель", "геймер", "музык", "фитнес", "бег", "трениров", "офис", "работ", "дом", "улица", "18+", "16+", "подрост", "мужчин", "женщин", "универсал", "все", "кажд", "пользовател", "клиент", "покупател", "люди", "человек", "парень", "девушк", "мальчик", "девочк", "студент", "школьник", "пенсионер", "мам", "пап", "ребён", "семь", "активн", "начинающ", "опытн", "категори", "любой", "кажд", "предназначен", "подходит", "для"])
+            has_seo = any(w in text_lower for w in ["seo", "ключ", "водостойк", "мониторинг", "отслеживан", "шаг", "пульс", "сердечн", "ритм", "bluetooth", "wifi", "gps", "наушник", "звук", "бас", "шум", "автоном", "батаре", "заряд", "время", "работа", "поддержк", "совместим", "android", "ios", "iphone", "качество", "hi", "hd", "стерео", "мощн", "громк", "тих", "функци", "возможност", "особенност", "характеристик", "параметр", "давлен", "калори", "сон", "активн", "тренировк", "упражнен", "бего", "плаван", "велосипед", "ходьб", "прыжк", "йога", "лёгк", "тяжёл", "компакт", "удобн", "прочн", "надёжн", "быстр", "медлен", "точн", "умн", "интеллек", "автомат", "подавлен", "связ", "подключен", "передач", "воспроизведен"])
             
             missing = []
-            if not has_color: missing.append("цвет")
+            if not has_color: missing.append("цвет/версию")
             if not has_audience: missing.append("аудиторию")
-            if not has_seo: missing.append("особенности")
+            if not has_seo: missing.append("особенности/SEO")
             
             if missing:
                 kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
-                await send_message_fallback(update, 
-                    f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n"
-                    f"💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", 
-                    reply_markup=InlineKeyboardMarkup(kb))
+                await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
                 return
             
             await show_progress(update, 6, 8)
@@ -813,7 +750,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data == "new_card":
-        await query.edit_message_text("➕ **Новая карточка**\nНапиши или надиктуй товар:", parse_mode='Markdown')
+        await query.edit_message_text("➕ **Новый запрос**\nНапиши или надиктуй, что нужно сделать:", parse_mode='Markdown')
     elif data == "my_cards":
         await mycards_command(update, context)
     elif data == "edit_last":
@@ -826,13 +763,63 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await help_command(update, context)
     elif data == "back_to_main":
-        await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text(" **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
         await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
-        await query.edit_message_text("🖼️ Напиши или надиктуй детали для фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
+        await query.edit_message_text("🖼️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
         await query.edit_message_text("💡 **Пример:**\n1. Чёрные, с микрофоном\n2. Для геймеров\n3. Bluetooth, шумоподавление\n\nЖду твой ответ! 👇", parse_mode='Markdown')
+    
+    # === НОВОЕ: Обработка режимов и генерации картинок ===
+    elif data == "show_modes":
+        current = user_modes.get(user_id, "marketplace")
+        mode_names = {"marketplace": " Маркетплейсы", "finance": " Финансы", "cooking": " Кулинария", "universal": " Универсал"}
+        
+        keyboard = []
+        for mode_key, mode_name in mode_names.items():
+            check = "✅ " if current == mode_key else ""
+            keyboard.append([InlineKeyboardButton(f"{check}{mode_name}", callback_data=f"set_mode_{mode_key}")])
+        keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
+        
+        await query.edit_message_text("🔄 **Выбери режим работы бота:**\n\nЭто изменит стиль и правила ответов AI.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    elif data.startswith("set_mode_"):
+        new_mode = data.replace("set_mode_", "")
+        user_modes[user_id] = new_mode
+        mode_names = {"marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", "universal": "🌐 Универсал"}
+        
+        # Очищаем память при смене режима, чтобы не было путаницы в контексте
+        if user_id in memory:
+            del memory[user_id]
+            
+        await query.edit_message_text(f"✅ **Режим изменен на:** {mode_names[new_mode]}\n\nТеперь я отвечаю как эксперт в этой области. Задай свой вопрос!", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+
+    elif data == "generate_image":
+        await query.answer(" Генерирую изображение...")
+        await query.message.reply_text("⏳ **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
+        
+        prompt_for_image = "High quality professional photography, studio lighting, 4k" 
+        
+        if user_id in card_history and card_history[user_id]:
+            last_card = card_history[user_id][-1]
+            match = re.search(r'\*\*Название:\*\*\s*(.+)', last_card)
+            if match:
+                prompt_for_image = f"Professional product photography of {match.group(1)}, studio lighting, highly detailed, 8k resolution, photorealistic"
+        elif user_id in memory and memory[user_id]:
+            last_msg = memory[user_id][-1]['content']
+            prompt_for_image = f"Professional photo of {last_msg[:50]}, studio lighting, highly detailed, 8k"
+
+        image_bytes = await generate_image(prompt_for_image)
+        
+        if image_bytes:
+            await query.message.reply_photo(
+                photo=image_bytes,
+                caption="🖼️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
+                reply_markup=get_card_keyboard()
+            )
+        else:
+            await query.message.reply_text("❌ Не удалось сгенерировать изображение. Попробуй еще раз.")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
@@ -871,12 +858,11 @@ def main():
 
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # ВАЖНО: Порядок обработчиков! Сначала специфичные, потом общие.
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     application.add_handler(MessageHandler(filters.VOICE, handle_voice))
     application.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     application.add_handler(MessageHandler(filters.VIDEO, handle_video))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document)) # ИСПРАВЛЕНО
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location))
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
