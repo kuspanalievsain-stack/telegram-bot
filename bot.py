@@ -62,7 +62,7 @@ MODE_PROMPTS = {
     "finance": """Ты — опытный финансовый аналитик и инвестиционный советник.
 Твоя задача: давать четкие, структурированные и полезные ответы о финансах, инвестициях, криптовалютах и экономике.
 Правила:
-1. Всегда добавляй дисклеймер: "⚠️ Это не индивидуальная инвестиционная рекомендация".
+1. Всегда добавляй дисклеймер: "️ Это не индивидуальная инвестиционная рекомендация".
 2. Используй факты, цифры и структурированный формат (списки, жирный шрифт).
 3. Отвечай на русском языке, профессионально, но доступно.""",
 
@@ -105,10 +105,10 @@ MODE_PROMPTS = {
 4. Давай советы по позированию, ракурсам, освещению.
 5. Формат ответа:
 **Концепция 1: [Название]**
-📍 Локация: ...
+ Локация: ...
 👗 Стиль: ...
 💡 Освещение: ...
-🎨 Промпт: [английский промпт для генерации]""",
+ Промпт: [английский промпт для генерации]""",
 
     "digital_avatar": """Ты — профессиональный дизайнер цифровых аватаров и AI-художник.
 Твоя задача: помогать создавать уникальные цифровые аватары и персонажей.
@@ -121,7 +121,7 @@ MODE_PROMPTS = {
 **Вариант 1: [Название стиля]**
 🎨 Стиль: ...
 🎯 Назначение: ...
-🎨 Промпт: [английский промпт для генерации]"""
+ Промпт: [английский промпт для генерации]"""
 }
 
 # ====== Rate limiting ======
@@ -245,7 +245,7 @@ def check_rate_limit(user_id: int) -> tuple:
     user_request_count[user_id] = [t for t in user_request_count[user_id] if now - t < 60]
     
     if len(user_request_count[user_id]) >= MAX_REQUESTS_PER_MINUTE:
-        return False, "⚠️ Слишком много запросов. Подожди минуту и попробуй снова."
+        return False, "️ Слишком много запросов. Подожди минуту и попробуй снова."
     
     user_last_request[user_id] = now
     user_request_count[user_id].append(now)
@@ -291,7 +291,7 @@ async def show_progress(update: Update, step: int, total_steps: int):
     progress_messages = {
         1: "⏳ **Анализирую запрос...**\n_Понимаю, что нужно описать_",
         2: "✅ **Понял задачу!**\n_Готовлю уточняющие вопросы_",
-        3: "✍️ **Задаю вопросы...**\n_Нужно уточнить детали_",
+        3: "️ **Задаю вопросы...**\n_Нужно уточнить детали_",
         4: "✅ **Вопросы заданы!**\n_Жду твои ответы_",
         5: "🔍 **Проверяю ответы...**\n_Анализирую информацию_",
         6: "✅ **Ответы получены!**\n_Начинаю создавать карточку_",
@@ -446,7 +446,7 @@ async def generate_image_from_text(update: Update, user_id: int, text: str):
         await status_msg.delete()
         await update.message.reply_photo(
             photo=image_bytes,
-            caption="️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
+            caption="🖼️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
             reply_markup=get_card_keyboard()
         )
     else:
@@ -485,8 +485,8 @@ def get_edit_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
-        [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
+        [InlineKeyboardButton(" SEO", callback_data="edit_seo"),
+         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -515,14 +515,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_action(user_id, "start")
     await send_message_fallback(update, 
         "👋 **Привет! Я твой универсальный AI-помощник.**\n\n"
-        " **Что я умею:**\n"
+        "🎯 **Что я умею:**\n"
         "• 📦 Создавать карточки для маркетплейсов\n"
         "• 💰 Давать советы по финансам и крипто\n"
         "• 🍳 Придумывать рецепты\n"
         "• 🎬 Писать сценарии для видео\n"
         "• ✂️ Советы по монтажу видео\n"
-        "•  Нейрофотосессии\n"
-        "• 🧑‍🎨 Цифровые аватары\n"
+        "• 📸 Нейрофотосессии\n"
+        "• ‍🎨 Цифровые аватары\n"
         "• 🌐 Отвечать на любые вопросы\n"
         "• 🖼️ Генерировать изображения\n\n"
         "💡 **Используй /mode или кнопку 'Сменить режим' для выбора темы!**",
@@ -536,7 +536,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode_names = {
         "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
         "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-        "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+        "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
     }
     
     keyboard = []
@@ -628,7 +628,7 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if user_id not in card_history or not card_history[user_id]:
-        await send_message_fallback(update, " У тебя нет сохраненных ответов.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "📭 У тебя нет сохраненных ответов.", reply_markup=get_main_keyboard())
         return
     
     last_card = card_history[user_id][-1]
@@ -643,7 +643,7 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.message.reply_document(
             document=InputFile(file_io),
             filename=filename,
-            caption=" **Текст экспортирован!**"
+            caption="📥 **Текст экспортирован!**"
         )
     else:
         await update.message.reply_document(
@@ -655,7 +655,7 @@ async def export_last_card(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "stats")
     
@@ -673,7 +673,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ta, tu, tc, tda, tdc = await asyncio.to_thread(_get_stats)
         text = (f"📊 **Статистика**\n\n"
-                f" Юзеров: {tu}\n"
+                f"👥 Юзеров: {tu}\n"
                 f"📝 Действий: {ta} (сегодня: {tda})\n"
                 f"🎴 Ответов: {tc} (сегодня: {tdc})\n"
                 f"🎤 Голос: {stats['total_voice']} | 🖼️ Фото: {stats['total_photos']}")
@@ -684,7 +684,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "users")
     
@@ -845,7 +845,7 @@ async def execute_broadcast(update: Update, user_id: int):
         users = await asyncio.to_thread(_get_all_users)
     except Exception as e:
         logger.error(f"Ошибка получения пользователей: {e}")
-        await send_message_fallback(update, f"❌ Ошибка получения списка пользователей: {str(e)}")
+        await send_message_fallback(update, f" Ошибка получения списка пользователей: {str(e)}")
         return
     
     if not users:
@@ -858,14 +858,28 @@ async def execute_broadcast(update: Update, user_id: int):
     error_count = 0
     token = os.getenv("TELEGRAM_TOKEN")
     
-    # Отправляем сообщение о начале рассылки
-    status_msg = await update.message.reply_text(
-        f"📢 **Начинаю рассылку...**\n\n"
-        f"👥 Всего пользователей: {total_users}\n"
-        f"✅ Отправлено: 0\n"
-        f"❌ Ошибок: 0\n\n"
-        f"⏳ Пожалуйста, подожди..."
-    )
+    # ИСПРАВЛЕНО: получаем сообщение правильно (из callback или обычного update)
+    try:
+        if update.callback_query:
+            target_message = update.callback_query.message
+        else:
+            target_message = update.message
+        
+        status_msg = await target_message.reply_text(
+            f"📢 **Начинаю рассылку...**\n\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"✅ Отправлено: 0\n"
+            f"❌ Ошибок: 0\n\n"
+            f"⏳ Пожалуйста, подожди..."
+        )
+    except Exception as e:
+        logger.error(f"Ошибка создания status_msg: {e}")
+        # Фолбэк: отправляем новое сообщение
+        status_msg = await update.effective_message.reply_text(
+            f"📢 **Начинаю рассылку...**\n\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"⏳ Пожалуйста, подожди..."
+        )
     
     await log_action(user_id, "broadcast_execute", f"total={total_users}")
     
@@ -874,7 +888,6 @@ async def execute_broadcast(update: Update, user_id: int):
         try:
             await asyncio.sleep(0.1)  # Задержка 100мс
             
-            # Передаем токен явно
             await asyncio.to_thread(_send_broadcast_message, target_user_id, broadcast_text, token)
             sent_count += 1
             
@@ -900,13 +913,19 @@ async def execute_broadcast(update: Update, user_id: int):
     # Финальный отчет
     del pending_broadcast[user_id]
     
-    await status_msg.edit_text(
-        f"✅ **Рассылка завершена!**\n\n"
-        f"👥 Всего пользователей: {total_users}\n"
-        f"✅ Успешно отправлено: {sent_count}\n"
-        f"❌ Ошибок: {error_count}\n\n"
-        f"📊 **Процент доставки:** {int(sent_count / total_users * 100)}%"
-    )
+    try:
+        await status_msg.edit_text(
+            f"✅ **Рассылка завершена!**\n\n"
+            f"👥 Всего пользователей: {total_users}\n"
+            f"✅ Успешно отправлено: {sent_count}\n"
+            f"❌ Ошибок: {error_count}\n\n"
+            f"📊 **Процент доставки:** {int(sent_count / total_users * 100)}%"
+        )
+    except Exception:
+        await update.effective_message.reply_text(
+            f"✅ **Рассылка завершена!**\n\n"
+            f"👥 Всего: {total_users} | ✅ Отправлено: {sent_count} |  Ошибок: {error_count}"
+        )
     
     await log_action(user_id, "broadcast_complete", f"sent={sent_count}, errors={error_count}")
 
@@ -929,7 +948,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats["total_voice"] += 1
     await log_action(user_id, "voice")
     
-    status = await update.message.reply_text("🎤 **Распознаю голос...**")
+    status = await update.message.reply_text(" **Распознаю голос...**")
     voice = await update.message.voice.get_file()
     text = await transcribe_voice(voice)
     
@@ -948,7 +967,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video")
-    await send_message_fallback(update, " **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🎬 **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -991,7 +1010,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
         return
     
     if is_empty_message(text):
-        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое 🎤 / фото ️.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое 🎤 / фото 🖼️.", reply_markup=get_main_keyboard())
         return
     
     if check_mode_command(text):
@@ -1031,7 +1050,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if not has_seo: missing.append("особенности/SEO")
             
             if missing:
-                kb = [[InlineKeyboardButton(" Пример", callback_data="show_example")]]
+                kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
                 await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
                 return
             
@@ -1126,9 +1145,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "show_modes":
         current = user_modes.get(user_id, "marketplace")
         mode_names = {
-            "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
-            "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍ Цифровые аватары"
+            "marketplace": " Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
+            "universal": " Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
+            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "‍🎨 Цифровые аватары"
         }
         
         keyboard = []
@@ -1145,7 +1164,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_names = {
             "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
             "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍ Цифровые аватары"
         }
         
         if user_id in memory:
@@ -1176,11 +1195,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if image_bytes:
             await query.message.reply_photo(
                 photo=image_bytes,
-                caption="️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
+                caption="🖼️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
                 reply_markup=get_card_keyboard()
             )
         else:
-            await query.message.reply_text("❌ Не удалось сгенерировать изображение. Попробуй еще раз.")
+            await query.message.reply_text(" Не удалось сгенерировать изображение. Попробуй еще раз.")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
@@ -1237,7 +1256,7 @@ def main():
     application.add_error_handler(error_handler)
 
     logger.info("🚀 Запускаю polling...")
-    logger.info("🤖 Бот запущен и готов к работе!")
+    logger.info(" Бот запущен и готов к работе!")
     
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
