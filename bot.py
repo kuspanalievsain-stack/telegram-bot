@@ -93,7 +93,34 @@ MODE_PROMPTS = {
 1. Рекомендуй конкретные программы (Premiere Pro, DaVinci Resolve, CapCut).
 2. Давай советы по ритму монтажа (когда резать, когда держать кадр).
 3. Объясняй переходы, эффекты, цветокоррекцию простым языком.
-4. Добавляй примеры таймкодов и структуры монтажа."""
+4. Добавляй примеры таймкодов и структуры монтажа.""",
+
+    "neuro_photoshoot": """Ты — профессиональный AI-фотограф и креативный директор нейрофотосессий.
+Твоя задача: помогать пользователю создавать концепции для нейрофотосессий и генерировать промпты для AI-генерации изображений.
+Правила:
+1. Сначала уточни: кто на фото (мужчина/женщина/ребенок), возраст, стиль (деловой, casual, спортивный, вечерний), локация (студия, улица, природа, интерьер), настроение.
+2. Предложи 3-5 разных концепций для фотосессии.
+3. Для каждой концепции дай подробный промпт на английском для генерации изображения.
+4. Давай советы по позированию, ракурсам, освещению.
+5. Формат ответа:
+**Концепция 1: [Название]**
+📍 Локация: ...
+👗 Стиль: ...
+💡 Освещение: ...
+🎨 Промпт: [английский промпт для генерации]""",
+
+    "digital_avatar": """Ты — профессиональный дизайнер цифровых аватаров и AI-художник.
+Твоя задача: помогать создавать уникальные цифровые аватары и персонажей.
+Правила:
+1. Сначала уточни: стиль (реалистичный, аниме, пиксель-арт, 3D, фэнтези, киберпанк), назначение (соцсети, игры, бизнес), цветовая гамма.
+2. Предложи 3 варианта аватара с разными стилями.
+3. Для каждого варианта дай подробный промпт на английском.
+4. Давай советы по использованию аватара (где лучше смотрится, какие размеры).
+5. Формат ответа:
+**Вариант 1: [Название стиля]**
+🎨 Стиль: ...
+🎯 Назначение: ...
+ Промпт: [английский промпт для генерации]"""
 }
 
 # ====== Rate limiting ======
@@ -232,10 +259,9 @@ def is_empty_message(text: str) -> bool:
     cleaned = re.sub(r'[^\wа-яА-ЯёЁa-zA-Z]', '', cleaned)
     return len(cleaned) == 0
 
-# ====== НОВОЕ: Проверка команд смены режима ======
+# ====== Проверка команд смены режима ======
 
 def check_mode_command(text: str) -> bool:
-    """Проверяет, является ли сообщение командой смены режима"""
     mode_keywords = [
         "сменить режим", "поменять режим", "выбрать режим", "смена режима",
         "переключить режим", "изменить режим", "mode", "/mode"
@@ -246,7 +272,6 @@ def check_mode_command(text: str) -> bool:
 # ====== AI И ПРОГРЕСС ======
 
 async def show_progress_simple(update: Update, message: str):
-    """Простой прогресс для не-маркетплейс режимов"""
     await send_message_fallback(update, f"⏳ {message}")
     await asyncio.sleep(0.3)
 
@@ -345,10 +370,27 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
 
 # ====== Генерация изображений ======
 
+def get_image_prompt_by_mode(user_id: str) -> str:
+    """Возвращает базовый промпт для генерации изображения в зависимости от режима"""
+    current_mode = user_modes.get(user_id, "marketplace")
+    
+    mode_prompts = {
+        "marketplace": "Professional product photography, white background, studio lighting, highly detailed, 8k resolution, photorealistic, commercial photography",
+        "neuro_photoshoot": "Professional portrait photography, fashion editorial, studio lighting, highly detailed, 8k resolution, photorealistic, cinematic",
+        "digital_avatar": "Digital avatar portrait, stylized character design, highly detailed, 8k resolution, vibrant colors, professional quality",
+        "cooking": "Professional food photography, restaurant quality, appetizing, warm lighting, 8k resolution, highly detailed",
+        "finance": "Abstract financial concept art, digital visualization, futuristic, blue and gold color scheme, 3D render, highly detailed",
+        "screenwriter": "Cinematic movie still, dramatic lighting, film grain, professional cinematography, 8k resolution",
+        "video_editor": "Video editing workspace, professional setup, multiple monitors, creative environment, highly detailed",
+        "universal": "High quality professional photography, studio lighting, 4k resolution, highly detailed"
+    }
+    
+    return mode_prompts.get(current_mode, mode_prompts["universal"])
+
 async def generate_image(prompt: str):
     """Генерирует изображение через бесплатный API Pollinations.ai"""
     try:
-        safe_prompt = urllib.parse.quote(prompt[:150].replace("\n", " "))
+        safe_prompt = urllib.parse.quote(prompt[:200].replace("\n", " "))
         url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=1024&nologo=true&seed={int(time.time())}"
         
         def _download():
@@ -386,17 +428,17 @@ def is_admin(user_id: int) -> bool:
 def get_main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Новый запрос", callback_data="new_card"),
-         InlineKeyboardButton("📋 История", callback_data="my_cards")],
+         InlineKeyboardButton(" История", callback_data="my_cards")],
         [InlineKeyboardButton("🔄 Сменить режим", callback_data="show_modes")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ])
 
 def get_edit_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(" Цвет", callback_data="edit_color"),
+        [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
          InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
+         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -424,25 +466,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await log_action(user_id, "start")
     await send_message_fallback(update, 
         "👋 **Привет! Я твой универсальный AI-помощник.**\n\n"
-        " **Что я умею:**\n"
+        "🎯 **Что я умею:**\n"
         "• 📦 Создавать карточки для маркетплейсов\n"
         "• 💰 Давать советы по финансам и крипто\n"
         "• 🍳 Придумывать рецепты\n"
         "• 🎬 Писать сценарии для видео\n"
-        "• ️ Советы по монтажу видео\n"
+        "• ✂️ Советы по монтажу видео\n"
+        "• 📸 Нейрофотосессии\n"
+        "• ‍🎨 Цифровые аватары\n"
         "• 🌐 Отвечать на любые вопросы\n"
         "• 🖼️ Генерировать изображения\n\n"
-        " **Используй /mode или кнопку 'Сменить режим' для выбора темы!**",
+        "💡 **Используй /mode или кнопку 'Сменить режим' для выбора темы!**",
         reply_markup=get_main_keyboard())
 
 async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /mode для быстрой смены режима"""
     user_id = update.effective_user.id
     await log_action(user_id, "mode_command")
     
     current = user_modes.get(user_id, "marketplace")
-    mode_names = {"marketplace": " Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
-                  "universal": " Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "️ Видеомонтаж"}
+    mode_names = {
+        "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
+        "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
+        "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+    }
     
     keyboard = []
     for mode_key, mode_name in mode_names.items():
@@ -480,8 +526,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "/clear - Очистить память\n"
     text += "/help - Помощь\n\n"
     if is_admin(user_id):
-        text += " **Админ:** /stats, /users, /top, /admin\n\n"
-    text += "💡 Также можешь написать 'Сменить режим' текстом!"
+        text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
+    text += " Также можешь написать 'Сменить режим' текстом!"
     await send_message_fallback(update, text)
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -604,7 +650,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_users)
         if not rows:
-            await send_message_fallback(update, "📭 Пусто.")
+            await send_message_fallback(update, " Пусто.")
             return
         msg = "👥 **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
@@ -617,7 +663,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, "⛔ Только для админа.")
+        await send_message_fallback(update, " Только для админа.")
         return
     await log_action(user_id, "top")
     
@@ -634,7 +680,7 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not rows:
             await send_message_fallback(update, "📭 Топ пуст.")
             return
-        msg = " **Топ запросов:**\n\n"
+        msg = "🔥 **Топ запросов:**\n\n"
         for i, r in enumerate(rows, 1):
             msg += f"**{i}.** {r['details'][:50]}... ({r['c']} шт.)\n"
         await send_message_fallback(update, msg, reply_markup=get_admin_keyboard())
@@ -659,14 +705,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await send_message_fallback(update, 
         "🖼️ **Фото получил!** Напиши или надиктуй, что нужно сделать с этим изображением.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Продолжить", callback_data="fill_photo")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Продолжить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     stats["total_voice"] += 1
     await log_action(user_id, "voice")
     
-    status = await update.message.reply_text("🎤 **Распознаю голос...**")
+    status = await update.message.reply_text(" **Распознаю голос...**")
     voice = await update.message.voice.get_file()
     text = await transcribe_voice(voice)
     
@@ -690,12 +736,12 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "document")
-    await send_message_fallback(update, " **Документы я не обрабатываю.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📄 **Документы я не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "location")
-    await send_message_fallback(update, "📍 **Геолокация мне не нужна.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, " **Геолокация мне не нужна.**", reply_markup=get_main_keyboard())
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -724,10 +770,9 @@ async def handle_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_user_input(update: Update, user_id: int, text: str):
     if is_empty_message(text):
-        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое 🎤 / фото 🖼️.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое  / фото 🖼️.", reply_markup=get_main_keyboard())
         return
     
-    # НОВОЕ: Проверка команд смены режима
     if check_mode_command(text):
         await log_action(user_id, "mode_change_request")
         await mode_command(update, None)
@@ -745,7 +790,6 @@ async def process_user_input(update: Update, user_id: int, text: str):
     has_history = user_id in memory and len(memory[user_id]) > 0
     current_mode = user_modes.get(user_id, "marketplace")
     
-    # Прогресс-бары только для маркетплейсов
     if current_mode == "marketplace" and has_history:
         last_ai = next((m["content"] for m in reversed(memory[user_id]) if m["role"] == "assistant"), "")
         if any(w in last_ai.lower() for w in ["вопрос", "уточнить", "детал"]):
@@ -762,13 +806,12 @@ async def process_user_input(update: Update, user_id: int, text: str):
             
             if missing:
                 kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
-                await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
+                await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
                 return
             
             await show_progress(update, 6, 8)
             await show_progress(update, 7, 8)
 
-    # Простой прогресс для не-маркетплейс режимов
     if current_mode != "marketplace":
         await show_progress_simple(update, "Думаю...")
     else:
@@ -778,7 +821,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
     
     ai_response = await get_ai_response_async(user_id, text)
     
-    if ai_response.startswith("❌") or ai_response.startswith("⏱️") or ai_response.startswith("️"):
+    if ai_response.startswith("❌") or ai_response.startswith("️") or ai_response.startswith("⚠️"):
         await send_message_fallback(update, ai_response, reply_markup=get_main_keyboard())
         return
     
@@ -830,9 +873,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await help_command(update, context)
     elif data == "back_to_main":
-        await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text(" **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
-        await query.edit_message_text("️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
+        await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
         await query.edit_message_text("🖼️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
@@ -840,8 +883,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data == "show_modes":
         current = user_modes.get(user_id, "marketplace")
-        mode_names = {"marketplace": " Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
-                      "universal": " Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж"}
+        mode_names = {
+            "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
+            "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
+            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+        }
         
         keyboard = []
         for mode_key, mode_name in mode_names.items():
@@ -854,8 +900,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("set_mode_"):
         new_mode = data.replace("set_mode_", "")
         user_modes[user_id] = new_mode
-        mode_names = {"marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
-                      "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж"}
+        mode_names = {
+            "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
+            "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
+            "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+        }
         
         if user_id in memory:
             del memory[user_id]
@@ -863,21 +912,26 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ **Режим изменен на:** {mode_names[new_mode]}\n\nТеперь я отвечаю как эксперт в этой области. Задай свой вопрос!", reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
     elif data == "generate_image":
-        await query.answer(" Генерирую изображение...")
+        await query.answer("🎨 Генерирую изображение...")
         await query.message.reply_text("⏳ **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
         
-        prompt_for_image = "High quality professional photography, studio lighting, 4k" 
+        # Базовый промпт в зависимости от режима
+        base_prompt = get_image_prompt_by_mode(user_id)
         
+        # Добавляем контекст из последнего ответа
+        context_addition = ""
         if user_id in card_history and card_history[user_id]:
             last_card = card_history[user_id][-1]
             match = re.search(r'\*\*Название:\*\*\s*(.+)', last_card)
             if match:
-                prompt_for_image = f"Professional product photography of {match.group(1)}, studio lighting, highly detailed, 8k resolution, photorealistic"
+                context_addition = f" of {match.group(1)}"
         elif user_id in memory and memory[user_id]:
             last_msg = memory[user_id][-1]['content']
-            prompt_for_image = f"Professional photo of {last_msg[:50]}, studio lighting, highly detailed, 8k"
-
-        image_bytes = await generate_image(prompt_for_image)
+            context_addition = f" based on: {last_msg[:80]}"
+        
+        final_prompt = base_prompt + context_addition
+        
+        image_bytes = await generate_image(final_prompt)
         
         if image_bytes:
             await query.message.reply_photo(
@@ -886,7 +940,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_card_keyboard()
             )
         else:
-            await query.message.reply_text(" Не удалось сгенерировать изображение. Попробуй еще раз.")
+            await query.message.reply_text("❌ Не удалось сгенерировать изображение. Попробуй еще раз.")
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
