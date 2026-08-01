@@ -29,6 +29,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 memory = {}
 card_history = {}
 pending_photos = {}
+pending_broadcast = {}  # Хранит текст рассылки для подтверждения
 
 stats = {
     "total_messages": 0,
@@ -119,7 +120,7 @@ MODE_PROMPTS = {
 5. Формат ответа:
 **Вариант 1: [Название стиля]**
 🎨 Стиль: ...
-🎯 Назначение: ...
+ Назначение: ...
 🎨 Промпт: [английский промпт для генерации]"""
 }
 
@@ -414,7 +415,7 @@ async def generate_image(prompt: str):
 async def generate_image_from_text(update: Update, user_id: int, text: str):
     await log_action(user_id, "image_generation_text")
     
-    status_msg = await update.message.reply_text(" **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
+    status_msg = await update.message.reply_text("⏳ **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
     
     base_prompt = get_image_prompt_by_mode(user_id)
     
@@ -495,6 +496,7 @@ def get_admin_keyboard():
          InlineKeyboardButton("👥 Пользователи", callback_data="admin_users")],
         [InlineKeyboardButton("🔥 Топ товаров", callback_data="admin_top"),
          InlineKeyboardButton("📜 Логи", callback_data="admin_logs")],
+        [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -503,7 +505,7 @@ def get_card_keyboard():
         [InlineKeyboardButton("🖼️ Сгенерировать фото", callback_data="generate_image")],
         [InlineKeyboardButton("➕ Новый", callback_data="new_card"),
          InlineKeyboardButton("📋 Мои", callback_data="my_cards")],
-        [InlineKeyboardButton(" Скачать TXT", callback_data="export_last_card")]
+        [InlineKeyboardButton("📥 Скачать TXT", callback_data="export_last_card")]
     ])
 
 # ====== ОБРАБОТЧИКИ КОМАНД ======
@@ -520,8 +522,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🎬 Писать сценарии для видео\n"
         "• ✂️ Советы по монтажу видео\n"
         "• 📸 Нейрофотосессии\n"
-        "• 🧑‍🎨 Цифровые аватары\n"
-        "•  Отвечать на любые вопросы\n"
+        "• ‍🎨 Цифровые аватары\n"
+        "• 🌐 Отвечать на любые вопросы\n"
         "• 🖼️ Генерировать изображения\n\n"
         "💡 **Используй /mode или кнопку 'Сменить режим' для выбора темы!**",
         reply_markup=get_main_keyboard())
@@ -532,7 +534,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     current = user_modes.get(user_id, "marketplace")
     mode_names = {
-        "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
+        "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": " Кулинария", 
         "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
         "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
     }
@@ -573,7 +575,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "/clear - Очистить память\n"
     text += "/help - Помощь\n\n"
     if is_admin(user_id):
-        text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
+        text += "🔐 **Админ:** /stats, /users, /top, /admin, /broadcast\n\n"
     text += "💡 Также можешь написать 'Сменить режим' текстом!"
     await send_message_fallback(update, text)
 
@@ -603,7 +605,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_action(user_id, "edit_card", edit_text)
         await send_message_fallback(update, "✅ **Обновлено!**\n\n" + edited, reply_markup=get_card_keyboard())
     except Exception as e:
-        await send_message_fallback(update, f" Ошибка: {str(e)}")
+        await send_message_fallback(update, f"❌ Ошибка: {str(e)}")
 
 async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -614,7 +616,7 @@ async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     cards = card_history[user_id][-5:]
-    msg = f"📋 **Последние ответы** ({len(cards)} из {len(card_history[user_id])}):\n\n"
+    msg = f" **Последние ответы** ({len(cards)} из {len(card_history[user_id])}):\n\n"
     for i, card in enumerate(reversed(cards), 1):
         preview = card[:100].replace("\n", " ").replace("**", "") + "..."
         msg += f"**{i}.** {preview}\n\n"
@@ -732,13 +734,174 @@ async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"**{i}.** {r['details'][:50]}... ({r['c']} шт.)\n"
         await send_message_fallback(update, msg, reply_markup=get_admin_keyboard())
     except Exception as e:
-        await send_message_fallback(update, f"❌ Ошибка: {str(e)}")
+        await send_message_fallback(update, f" Ошибка: {str(e)}")
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await send_message_fallback(update, "⛔ Только для админа.")
+        await send_message_fallback(update, " Только для админа.")
         return
     await send_message_fallback(update, "🔐 **Админ-панель**\nВыбери раздел:", reply_markup=get_admin_keyboard())
+
+# ====== НОВОЕ: Рассылка ======
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /broadcast для начала создания рассылки"""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await send_message_fallback(update, "⛔ Только для админа.")
+        return
+    
+    await log_action(user_id, "broadcast_start")
+    pending_broadcast[user_id] = {"status": "waiting_text"}
+    
+    await send_message_fallback(update, 
+        "📢 **Создание рассылки**\n\n"
+        "Напиши текст, который нужно отправить всем пользователям.\n\n"
+        "💡 **Советы:**\n"
+        "• Используй Markdown (**жирный**, *курсив*)\n"
+        "• Добавь эмодзи для привлечения внимания\n"
+        "• Не делай текст слишком длинным\n\n"
+        "❌ Чтобы отменить, напиши: отмена",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Отменить", callback_data="cancel_broadcast")]]))
+
+async def process_broadcast_text(update: Update, user_id: int, text: str):
+    """Обрабатывает текст рассылки и показывает превью"""
+    if user_id not in pending_broadcast:
+        return False
+    
+    if pending_broadcast[user_id].get("status") != "waiting_text":
+        return False
+    
+    if text.lower().strip() == "отмена":
+        del pending_broadcast[user_id]
+        await send_message_fallback(update, "❌ **Рассылка отменена.**", reply_markup=get_admin_keyboard())
+        return True
+    
+    # Сохраняем текст и показываем превью
+    pending_broadcast[user_id]["text"] = text
+    pending_broadcast[user_id]["status"] = "waiting_confirm"
+    
+    preview = text[:500] + ("..." if len(text) > 500 else "")
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Отправить всем", callback_data="confirm_broadcast"),
+         InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")]
+    ])
+    
+    await send_message_fallback(update, 
+        f" **Превью рассылки:**\n\n{preview}\n\n"
+        f"📊 **Длина:** {len(text)} символов\n\n"
+        f"⚠️ **Внимание!** Это сообщение будет отправлено **всем пользователям** бота.\n\n"
+        f"Подтверди отправку или отмени:",
+        reply_markup=keyboard)
+    
+    return True
+
+async def execute_broadcast(update: Update, user_id: int):
+    """Выполняет рассылку всем пользователям"""
+    if user_id not in pending_broadcast:
+        await send_message_fallback(update, " Нет активной рассылки.")
+        return
+    
+    broadcast_text = pending_broadcast[user_id].get("text")
+    if not broadcast_text:
+        await send_message_fallback(update, "❌ Текст рассылки не найден.")
+        return
+    
+    # Получаем список всех пользователей из БД
+    def _get_all_users():
+        conn = psycopg.connect(os.getenv("DATABASE_URL"), row_factory=dict_row)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT user_id FROM user_actions")
+        users = [row['user_id'] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return users
+    
+    try:
+        users = await asyncio.to_thread(_get_all_users)
+    except Exception as e:
+        logger.error(f"Ошибка получения пользователей: {e}")
+        await send_message_fallback(update, f"❌ Ошибка получения списка пользователей: {str(e)}")
+        return
+    
+    if not users:
+        await send_message_fallback(update, "📭 Нет пользователей для рассылки.")
+        del pending_broadcast[user_id]
+        return
+    
+    total_users = len(users)
+    sent_count = 0
+    error_count = 0
+    
+    # Отправляем сообщение о начале рассылки
+    status_msg = await update.message.reply_text(
+        f"📢 **Начинаю рассылку...**\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"✅ Отправлено: 0\n"
+        f"❌ Ошибок: 0\n\n"
+        f"⏳ Пожалуйста, подожди..."
+    )
+    
+    await log_action(user_id, "broadcast_execute", f"total={total_users}")
+    
+    # Отправляем сообщения с задержкой (чтобы не получить бан)
+    for i, target_user_id in enumerate(users):
+        try:
+            await asyncio.sleep(0.1)  # Задержка 100мс между сообщениями
+            
+            await asyncio.to_thread(
+                lambda: _send_broadcast_message(target_user_id, broadcast_text)
+            )
+            sent_count += 1
+            
+            # Обновляем статус каждые 10 сообщений
+            if (i + 1) % 10 == 0 or i == total_users - 1:
+                progress = int((i + 1) / total_users * 100)
+                progress_bar = "█" * (progress // 10) + "░" * (10 - progress // 10)
+                
+                await status_msg.edit_text(
+                    f"📢 **Рассылка в процессе...**\n\n"
+                    f"**Прогресс:** [{progress_bar}] {i + 1}/{total_users} ({progress}%)\n"
+                    f"✅ Отправлено: {sent_count}\n"
+                    f"❌ Ошибок: {error_count}"
+                )
+        
+        except Exception as e:
+            error_count += 1
+            logger.warning(f"Ошибка отправки пользователю {target_user_id}: {e}")
+    
+    # Финальный отчет
+    del pending_broadcast[user_id]
+    
+    await status_msg.edit_text(
+        f"✅ **Рассылка завершена!**\n\n"
+        f"👥 Всего пользователей: {total_users}\n"
+        f"✅ Успешно отправлено: {sent_count}\n"
+        f"❌ Ошибок: {error_count}\n\n"
+        f" **Процент доставки:** {int(sent_count / total_users * 100)}%"
+    )
+    
+    await log_action(user_id, "broadcast_complete", f"sent={sent_count}, errors={error_count}")
+
+def _send_broadcast_message(user_id: int, text: str):
+    """Отправляет сообщение конкретному пользователю (синхронная версия)"""
+    import requests
+    token = os.getenv("TELEGRAM_TOKEN")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    
+    payload = {
+        "chat_id": user_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    
+    response = requests.post(url, json=payload, timeout=10)
+    
+    if response.status_code != 200:
+        raise Exception(f"HTTP {response.status_code}: {response.text}")
+    
+    return response.json()
 
 # ====== ОБРАБОТЧИКИ МЕДИА И СООБЩЕНИЙ ======
 
@@ -751,7 +914,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_photos[user_id] = await photo.download_as_bytearray()
     
     await send_message_fallback(update, 
-        "🖼️ **Фото получил!** Напиши или надиктуй, что нужно сделать с этим изображением.",
+        "️ **Фото получил!** Напиши или надиктуй, что нужно сделать с этим изображением.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Продолжить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -778,7 +941,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video")
-    await send_message_fallback(update, " **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "🎬 **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -803,7 +966,7 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_video_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video_note")
-    await send_message_fallback(update, "📹 **Видео-кружочки я не обрабатываю.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, " **Видео-кружочки я не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_animation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -816,6 +979,10 @@ async def handle_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_message_fallback(update, "📊 **Опросы я не поддерживаю.**", reply_markup=get_main_keyboard())
 
 async def process_user_input(update: Update, user_id: int, text: str):
+    # Проверяем, не является ли это текстом рассылки
+    if await process_broadcast_text(update, user_id, text):
+        return
+    
     if is_empty_message(text):
         await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое 🎤 / фото 🖼️.", reply_markup=get_main_keyboard())
         return
@@ -857,7 +1024,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if not has_seo: missing.append("особенности/SEO")
             
             if missing:
-                kb = [[InlineKeyboardButton(" Пример", callback_data="show_example")]]
+                kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
                 await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
                 return
             
@@ -873,7 +1040,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
     
     ai_response = await get_ai_response_async(user_id, text)
     
-    if ai_response.startswith("❌") or ai_response.startswith("⏱️") or ai_response.startswith("⚠️"):
+    if ai_response.startswith("❌") or ai_response.startswith("️") or ai_response.startswith("⚠️"):
         await send_message_fallback(update, ai_response, reply_markup=get_main_keyboard())
         return
     
@@ -906,13 +1073,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_logs":
         await query.edit_message_text("📜 Логи пишутся в БД (`user_actions`). Используй `/users`.", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
         return
+    if data == "admin_broadcast":
+        await broadcast_command(update, context)
+        return
+    
+    if data == "confirm_broadcast":
+        if not is_admin(user_id):
+            await query.edit_message_text("⛔ Только для админа.")
+            return
+        await execute_broadcast(update, user_id)
+        return
+    
+    if data == "cancel_broadcast":
+        if user_id in pending_broadcast:
+            del pending_broadcast[user_id]
+        await query.edit_message_text(" **Рассылка отменена.**", reply_markup=get_admin_keyboard(), parse_mode='Markdown')
+        return
     
     if data == "export_last_card":
         await export_last_card(update, context)
         return
     
     if data == "new_card":
-        await query.edit_message_text(" **Новый запрос**\nНапиши или надиктуй, что нужно сделать:", parse_mode='Markdown')
+        await query.edit_message_text("➕ **Новый запрос**\nНапиши или надиктуй, что нужно сделать:", parse_mode='Markdown')
     elif data == "my_cards":
         await mycards_command(update, context)
     elif data == "edit_last":
@@ -925,11 +1108,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await help_command(update, context)
     elif data == "back_to_main":
-        await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text(" **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
         await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
-        await query.edit_message_text("️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
+        await query.edit_message_text("🖼️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
         await query.edit_message_text("💡 **Пример:**\n1. Чёрные, с микрофоном\n2. Для геймеров\n3. Bluetooth, шумоподавление\n\nЖду твой ответ! 👇", parse_mode='Markdown')
     
@@ -938,7 +1121,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_names = {
             "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
             "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍ Цифровые аватары"
+            "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
         }
         
         keyboard = []
@@ -1027,6 +1210,7 @@ def main():
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("top", top_command))
     application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
 
     application.add_handler(CallbackQueryHandler(button_callback))
     
@@ -1046,7 +1230,7 @@ def main():
     application.add_error_handler(error_handler)
 
     logger.info("🚀 Запускаю polling...")
-    logger.info("🤖 Бот запущен и готов к работе!")
+    logger.info(" Бот запущен и готов к работе!")
     
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
