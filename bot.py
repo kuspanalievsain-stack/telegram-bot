@@ -49,7 +49,7 @@ MODE_PROMPTS = {
 ✅ ПРАВИЛА РАБОТЫ:
 1. Сначала задай 3 вопроса (цвет/версия, аудитория, SEO). Жди ответов.
 2. Только после получения всех ответов создавай карточку.
-📋 ФОРМАТ КАРТОЧКИ (строго придерживайся):
+ ФОРМАТ КАРТОЧКИ (строго придерживайся):
 **Название:** [Краткое, цепляющее название с ключевыми словами]
 **Описание:** [2-3 предложения о товаре, его преимуществах и пользе для покупателя]
 **Характеристики:** (5 пунктов)
@@ -120,7 +120,7 @@ MODE_PROMPTS = {
 **Вариант 1: [Название стиля]**
 🎨 Стиль: ...
 🎯 Назначение: ...
- Промпт: [английский промпт для генерации]"""
+🎨 Промпт: [английский промпт для генерации]"""
 }
 
 # ====== Rate limiting ======
@@ -269,6 +269,17 @@ def check_mode_command(text: str) -> bool:
     text_lower = text.lower().strip()
     return any(keyword in text_lower for keyword in mode_keywords)
 
+# ====== Проверка команд генерации изображений ======
+
+def check_image_generation_command(text: str) -> bool:
+    image_keywords = [
+        "сгенерировать фото", "создать изображение", "нарисуй картинку",
+        "сделай фото", "сгенерируй картинку", "создай фото", "нарисуй фото",
+        "сгенерировать изображение", "создать картинку"
+    ]
+    text_lower = text.lower().strip()
+    return any(keyword in text_lower for keyword in image_keywords)
+
 # ====== AI И ПРОГРЕСС ======
 
 async def show_progress_simple(update: Update, message: str):
@@ -371,9 +382,6 @@ async def get_ai_response_async(user_id, user_message, photo_analysis=""):
 # ====== Генерация изображений ======
 
 def get_image_prompt_by_mode(user_id: str) -> str:
-    """Возвращает базовый промпт для генерации изображения в зависимости от режима"""
-    current_mode = user_modes.get(user_id, "marketplace")
-    
     mode_prompts = {
         "marketplace": "Professional product photography, white background, studio lighting, highly detailed, 8k resolution, photorealistic, commercial photography",
         "neuro_photoshoot": "Professional portrait photography, fashion editorial, studio lighting, highly detailed, 8k resolution, photorealistic, cinematic",
@@ -385,10 +393,9 @@ def get_image_prompt_by_mode(user_id: str) -> str:
         "universal": "High quality professional photography, studio lighting, 4k resolution, highly detailed"
     }
     
-    return mode_prompts.get(current_mode, mode_prompts["universal"])
+    return mode_prompts.get(user_modes.get(user_id, "marketplace"), mode_prompts["universal"])
 
 async def generate_image(prompt: str):
-    """Генерирует изображение через бесплатный API Pollinations.ai"""
     try:
         safe_prompt = urllib.parse.quote(prompt[:200].replace("\n", " "))
         url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1024&height=1024&nologo=true&seed={int(time.time())}"
@@ -403,6 +410,46 @@ async def generate_image(prompt: str):
     except Exception as e:
         logger.error(f"Ошибка генерации изображения: {e}")
         return None
+
+async def generate_image_from_text(update: Update, user_id: int, text: str):
+    await log_action(user_id, "image_generation_text")
+    
+    status_msg = await update.message.reply_text(" **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
+    
+    base_prompt = get_image_prompt_by_mode(user_id)
+    
+    description = text
+    for keyword in ["сгенерировать фото", "создать изображение", "нарисуй картинку", 
+                    "сделай фото", "сгенерируй картинку", "создай фото", "нарисуй фото",
+                    "сгенерировать изображение", "создать картинку"]:
+        description = description.lower().replace(keyword, "").strip()
+    
+    context_addition = ""
+    if user_id in card_history and card_history[user_id]:
+        last_card = card_history[user_id][-1]
+        match = re.search(r'\*\*Название:\*\*\s*(.+)', last_card)
+        if match:
+            context_addition = f" of {match.group(1)}"
+    elif user_id in memory and memory[user_id]:
+        last_msg = memory[user_id][-1]['content']
+        context_addition = f" based on: {last_msg[:80]}"
+    
+    if description:
+        final_prompt = f"{base_prompt}, {description}{context_addition}"
+    else:
+        final_prompt = base_prompt + context_addition
+    
+    image_bytes = await generate_image(final_prompt)
+    
+    if image_bytes:
+        await status_msg.delete()
+        await update.message.reply_photo(
+            photo=image_bytes,
+            caption="🖼️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
+            reply_markup=get_card_keyboard()
+        )
+    else:
+        await status_msg.edit_text("❌ Не удалось сгенерировать изображение. Попробуй еще раз.")
 
 async def send_message_fallback(update: Update, text: str, reply_markup=None):
     try:
@@ -428,7 +475,7 @@ def is_admin(user_id: int) -> bool:
 def get_main_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Новый запрос", callback_data="new_card"),
-         InlineKeyboardButton(" История", callback_data="my_cards")],
+         InlineKeyboardButton("📋 История", callback_data="my_cards")],
         [InlineKeyboardButton("🔄 Сменить режим", callback_data="show_modes")],
         [InlineKeyboardButton("❓ Помощь", callback_data="help")]
     ])
@@ -436,9 +483,9 @@ def get_main_keyboard():
 def get_edit_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💬 Цвет", callback_data="edit_color"),
-         InlineKeyboardButton("👥 ЦА", callback_data="edit_audience")],
+         InlineKeyboardButton(" ЦА", callback_data="edit_audience")],
         [InlineKeyboardButton("🔑 SEO", callback_data="edit_seo"),
-         InlineKeyboardButton(" Свой запрос", callback_data="edit_custom")],
+         InlineKeyboardButton("📝 Свой запрос", callback_data="edit_custom")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ])
 
@@ -456,7 +503,7 @@ def get_card_keyboard():
         [InlineKeyboardButton("🖼️ Сгенерировать фото", callback_data="generate_image")],
         [InlineKeyboardButton("➕ Новый", callback_data="new_card"),
          InlineKeyboardButton("📋 Мои", callback_data="my_cards")],
-        [InlineKeyboardButton("📥 Скачать TXT", callback_data="export_last_card")]
+        [InlineKeyboardButton(" Скачать TXT", callback_data="export_last_card")]
     ])
 
 # ====== ОБРАБОТЧИКИ КОМАНД ======
@@ -473,8 +520,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🎬 Писать сценарии для видео\n"
         "• ✂️ Советы по монтажу видео\n"
         "• 📸 Нейрофотосессии\n"
-        "• ‍🎨 Цифровые аватары\n"
-        "• 🌐 Отвечать на любые вопросы\n"
+        "• 🧑‍🎨 Цифровые аватары\n"
+        "•  Отвечать на любые вопросы\n"
         "• 🖼️ Генерировать изображения\n\n"
         "💡 **Используй /mode или кнопку 'Сменить режим' для выбора темы!**",
         reply_markup=get_main_keyboard())
@@ -487,7 +534,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode_names = {
         "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
         "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-        "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+        "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
     }
     
     keyboard = []
@@ -527,7 +574,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "/help - Помощь\n\n"
     if is_admin(user_id):
         text += "🔐 **Админ:** /stats, /users, /top, /admin\n\n"
-    text += " Также можешь написать 'Сменить режим' текстом!"
+    text += "💡 Также можешь написать 'Сменить режим' текстом!"
     await send_message_fallback(update, text)
 
 async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -556,7 +603,7 @@ async def edit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await log_action(user_id, "edit_card", edit_text)
         await send_message_fallback(update, "✅ **Обновлено!**\n\n" + edited, reply_markup=get_card_keyboard())
     except Exception as e:
-        await send_message_fallback(update, f"❌ Ошибка: {str(e)}")
+        await send_message_fallback(update, f" Ошибка: {str(e)}")
 
 async def mycards_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -623,11 +670,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         ta, tu, tc, tda, tdc = await asyncio.to_thread(_get_stats)
-        text = (f"📊 **Статистика**\n\n"
-                f" Юзеров: {tu}\n"
+        text = (f" **Статистика**\n\n"
+                f"👥 Юзеров: {tu}\n"
                 f"📝 Действий: {ta} (сегодня: {tda})\n"
                 f"🎴 Ответов: {tc} (сегодня: {tdc})\n"
-                f"🎤 Голос: {stats['total_voice']} | 🖼️ Фото: {stats['total_photos']}")
+                f"🎤 Голос: {stats['total_voice']} | ️ Фото: {stats['total_photos']}")
         await send_message_fallback(update, text, reply_markup=get_admin_keyboard())
     except Exception as e:
         await send_message_fallback(update, f"❌ Ошибка: {str(e)}")
@@ -650,7 +697,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         rows = await asyncio.to_thread(_get_users)
         if not rows:
-            await send_message_fallback(update, " Пусто.")
+            await send_message_fallback(update, "📭 Пусто.")
             return
         msg = "👥 **Топ-10 юзеров:**\n\n"
         for i, r in enumerate(rows, 1):
@@ -663,7 +710,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def top_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await send_message_fallback(update, " Только для админа.")
+        await send_message_fallback(update, "⛔ Только для админа.")
         return
     await log_action(user_id, "top")
     
@@ -705,14 +752,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await send_message_fallback(update, 
         "🖼️ **Фото получил!** Напиши или надиктуй, что нужно сделать с этим изображением.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(" Продолжить", callback_data="fill_photo")]]))
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Продолжить", callback_data="fill_photo")]]))
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     stats["total_voice"] += 1
     await log_action(user_id, "voice")
     
-    status = await update.message.reply_text(" **Распознаю голос...**")
+    status = await update.message.reply_text("🎤 **Распознаю голос...**")
     voice = await update.message.voice.get_file()
     text = await transcribe_voice(voice)
     
@@ -731,7 +778,7 @@ async def handle_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "video")
-    await send_message_fallback(update, "🎬 **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, " **Видео я пока не обрабатываю.**", reply_markup=get_main_keyboard())
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -741,7 +788,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await log_action(user_id, "location")
-    await send_message_fallback(update, " **Геолокация мне не нужна.**", reply_markup=get_main_keyboard())
+    await send_message_fallback(update, "📍 **Геолокация мне не нужна.**", reply_markup=get_main_keyboard())
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -770,12 +817,17 @@ async def handle_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_user_input(update: Update, user_id: int, text: str):
     if is_empty_message(text):
-        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое  / фото 🖼️.", reply_markup=get_main_keyboard())
+        await send_message_fallback(update, "🤔 **Сообщение пустое.**\n\nНапиши текст или отправь голосовое 🎤 / фото 🖼️.", reply_markup=get_main_keyboard())
         return
     
     if check_mode_command(text):
         await log_action(user_id, "mode_change_request")
         await mode_command(update, None)
+        return
+    
+    if check_image_generation_command(text):
+        await log_action(user_id, "image_generation_request")
+        await generate_image_from_text(update, user_id, text)
         return
     
     allowed, message = check_rate_limit(user_id)
@@ -805,8 +857,8 @@ async def process_user_input(update: Update, user_id: int, text: str):
             if not has_seo: missing.append("особенности/SEO")
             
             if missing:
-                kb = [[InlineKeyboardButton("💡 Пример", callback_data="show_example")]]
-                await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
+                kb = [[InlineKeyboardButton(" Пример", callback_data="show_example")]]
+                await send_message_fallback(update, f"🙏 Спасибо! Не хватает: **{', '.join(missing)}**.\n\n💡 Пример: «1. Чёрные. 2. Для геймеров. 3. Bluetooth, шумоподавление»", reply_markup=InlineKeyboardMarkup(kb))
                 return
             
             await show_progress(update, 6, 8)
@@ -821,7 +873,7 @@ async def process_user_input(update: Update, user_id: int, text: str):
     
     ai_response = await get_ai_response_async(user_id, text)
     
-    if ai_response.startswith("❌") or ai_response.startswith("️") or ai_response.startswith("⚠️"):
+    if ai_response.startswith("❌") or ai_response.startswith("⏱️") or ai_response.startswith("⚠️"):
         await send_message_fallback(update, ai_response, reply_markup=get_main_keyboard())
         return
     
@@ -860,7 +912,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if data == "new_card":
-        await query.edit_message_text("➕ **Новый запрос**\nНапиши или надиктуй, что нужно сделать:", parse_mode='Markdown')
+        await query.edit_message_text(" **Новый запрос**\nНапиши или надиктуй, что нужно сделать:", parse_mode='Markdown')
     elif data == "my_cards":
         await mycards_command(update, context)
     elif data == "edit_last":
@@ -873,11 +925,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "help":
         await help_command(update, context)
     elif data == "back_to_main":
-        await query.edit_message_text(" **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
+        await query.edit_message_text("🏠 **Главное меню**\nЧто делаем?", reply_markup=get_main_keyboard(), parse_mode='Markdown')
     elif data == "upload_photo":
         await query.edit_message_text("🖼️ Загрузи фото товара (скрепка -> Фото).", parse_mode='Markdown')
     elif data == "fill_photo":
-        await query.edit_message_text("🖼️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
+        await query.edit_message_text("️ Напиши или надиктуй, что нужно сделать с фото:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]]), parse_mode='Markdown')
     elif data == "show_example":
         await query.edit_message_text("💡 **Пример:**\n1. Чёрные, с микрофоном\n2. Для геймеров\n3. Bluetooth, шумоподавление\n\nЖду твой ответ! 👇", parse_mode='Markdown')
     
@@ -886,7 +938,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_names = {
             "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
             "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍ Цифровые аватары"
         }
         
         keyboard = []
@@ -903,7 +955,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode_names = {
             "marketplace": "📦 Маркетплейсы", "finance": "💰 Финансы", "cooking": "🍳 Кулинария", 
             "universal": "🌐 Универсал", "screenwriter": "🎬 Сценарист", "video_editor": "✂️ Видеомонтаж",
-            "neuro_photoshoot": " Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
+            "neuro_photoshoot": "📸 Нейрофотосессии", "digital_avatar": "🧑‍🎨 Цифровые аватары"
         }
         
         if user_id in memory:
@@ -915,10 +967,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("🎨 Генерирую изображение...")
         await query.message.reply_text("⏳ **Генерирую изображение...**\nЭто может занять 10-20 секунд.")
         
-        # Базовый промпт в зависимости от режима
         base_prompt = get_image_prompt_by_mode(user_id)
         
-        # Добавляем контекст из последнего ответа
         context_addition = ""
         if user_id in card_history and card_history[user_id]:
             last_card = card_history[user_id][-1]
@@ -936,7 +986,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if image_bytes:
             await query.message.reply_photo(
                 photo=image_bytes,
-                caption="🖼️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
+                caption="️ **Изображение готово!**\n(Сгенерировано AI на основе твоего запроса)",
                 reply_markup=get_card_keyboard()
             )
         else:
